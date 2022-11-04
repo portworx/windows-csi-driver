@@ -27,7 +27,7 @@ include release-tools/build.make
 GIT_COMMIT ?= $(shell git rev-parse HEAD)
 REGISTRY = docker.io/sulakshm
 #REGISTRY_NAME = $(shell echo $(REGISTRY) | sed "s/.azurecr.io//g")
-#IMAGE_VERSION ?= v1.10.0
+IMAGE_VERSION ?= v0.1.1
 VERSION ?= latest
 # Use a custom version for E2E tests if we are testing in CI
 ifdef CI
@@ -124,35 +124,35 @@ pxplugin:
 
 .PHONY: pxplugin-armv7
 pxplugin-armv7:
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm go build -a -ldflags "${LDFLAGS} ${EXT_LDFLAGS}" -mod vendor -o _output/arm/v7/smbplugin ./cmd/smbplugin
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm go build -a -ldflags "${LDFLAGS} ${EXT_LDFLAGS}" -mod vendor -o _output/arm/v7/pxplugin ./cmd/pxplugin
 
 .PHONY: pxplugin-windows
 pxplugin-windows:
-	CGO_ENABLED=0 GOOS=windows go build -a -ldflags "${LDFLAGS} ${EXT_LDFLAGS}" -mod vendor -o _output/${ARCH}/smbplugin.exe ./cmd/smbplugin
+	CGO_ENABLED=0 GOOS=windows go build -a -ldflags "${LDFLAGS} ${EXT_LDFLAGS}" -mod vendor -o _output/${ARCH}/pxplugin.exe ./cmd/pxplugin
 
 .PHONY: pxplugin-darwin
 pxplugin-darwin:
-	CGO_ENABLED=0 GOOS=darwin go build -a -ldflags "${LDFLAGS} ${EXT_LDFLAGS}" -mod vendor -o _output/${ARCH}/smbplugin ./cmd/smbplugin
+	CGO_ENABLED=0 GOOS=darwin go build -a -ldflags "${LDFLAGS} ${EXT_LDFLAGS}" -mod vendor -o _output/${ARCH}/pxplugin ./cmd/pxplugin
 
 .PHONY: container
 container: pxplugin
-	docker build --no-cache -t $(IMAGE_TAG) --output=type=docker -f ./cmd/smbplugin/Dockerfile .
+	docker build --no-cache -t $(IMAGE_TAG) --output=type=docker -f ./cmd/pxplugin/Dockerfile .
 
 .PHONY: container-linux
 container-linux:
 	docker buildx build --pull --output=type=$(OUTPUT_TYPE) --platform="linux/$(ARCH)" \
-		-t $(IMAGE_TAG)-linux-$(ARCH) --build-arg ARCH=$(ARCH) -f ./cmd/smbplugin/Dockerfile .
+		-t $(IMAGE_TAG)-linux-$(ARCH) --build-arg ARCH=$(ARCH) -f ./cmd/pxplugin/Dockerfile .
 
 .PHONY: container-linux-armv7
 container-linux-armv7:
 	docker buildx build --pull --output=type=$(OUTPUT_TYPE) --platform="linux/arm/v7" \
-		-t $(IMAGE_TAG)-linux-arm-v7 --build-arg ARCH=arm/v7 -f ./cmd/smbplugin/Dockerfile .
+		-t $(IMAGE_TAG)-linux-arm-v7 --build-arg ARCH=arm/v7 -f ./cmd/pxplugin/Dockerfile .
 
 .PHONY: container-windows
 container-windows:
 	docker buildx build --pull --output=type=$(OUTPUT_TYPE) --platform="windows/$(ARCH)" \
 		 -t $(IMAGE_TAG)-windows-$(OSVERSION)-$(ARCH) --build-arg OSVERSION=$(OSVERSION) \
-		 --build-arg ARCH=$(ARCH) -f ./cmd/smbplugin/Dockerfile.Windows .
+		 --build-arg ARCH=$(ARCH) -f ./cmd/pxplugin/Dockerfile.Windows .
 
 .PHONY: container-all
 container-all: pxplugin-windows

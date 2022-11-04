@@ -30,10 +30,10 @@ import (
 	fs "github.com/kubernetes-csi/csi-proxy/client/api/filesystem/v1"
 	fsclient "github.com/kubernetes-csi/csi-proxy/client/groups/filesystem/v1"
 
-	iscsi "github.com/kubernetes-csi/csi-proxy/client/api/iscsi/v1alpha2"
+	// iscsi "github.com/kubernetes-csi/csi-proxy/client/api/iscsi/v1alpha2"
 	iscsiclient "github.com/kubernetes-csi/csi-proxy/client/groups/iscsi/v1alpha2"
 
-	vol "github.com/kubernetes-csi/csi-proxy/client/api/volume/v1"
+	// vol "github.com/kubernetes-csi/csi-proxy/client/api/volume/v1"
 	volclient "github.com/kubernetes-csi/csi-proxy/client/groups/volume/v1"
 
 	smb "github.com/kubernetes-csi/csi-proxy/client/api/smb/v1"
