@@ -8,9 +8,6 @@ import (
         "sigs.k8s.io/yaml"
 )
 
-/// same driver as linux csi-driver
-const driverName = "pxd.portworx.com"
-
 // These are set during build time via -ldflags
 var (
         driverVersion = "N/A"
