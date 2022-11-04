@@ -34,7 +34,7 @@ var (
 func main() {
 	flag.Parse()
 	if *ver {
-		info, err := smb.GetVersionYAML(*driverName)
+		info, err := pwx.GetVersionYAML(*driverName)
 		if err != nil {
 			klog.Fatalln(err)
 		}
@@ -51,14 +51,14 @@ func main() {
 }
 
 func handle() {
-	driverOptions := smb.DriverOptions{
+	driverOptions := pwx.DriverOptions{
 		NodeID:                        *nodeID,
 		DriverName:                    *driverName,
 		EnableGetVolumeStats:          *enableGetVolumeStats,
 		RemoveSMBMappingDuringUnmount: *removeSMBMappingDuringUnmount,
 		WorkingMountDir:               *workingMountDir,
 	}
-	driver := smb.NewDriver(&driverOptions)
+	driver := pwx.NewDriver(&driverOptions)
 	driver.Run(*endpoint, *kubeconfig, false)
 }
 
