@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/sulakshm/csi-driver/pkg/common"
+	csicommon "github.com/sulakshm/csi-driver/pkg/csi-common"
 	pwx "github.com/sulakshm/csi-driver/pkg/portworx"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -29,6 +31,7 @@ var (
 	enableGetVolumeStats          = flag.Bool("enable-get-volume-stats", true, "allow GET_VOLUME_STATS on agent node")
 	removeSMBMappingDuringUnmount = flag.Bool("remove-smb-mapping-during-unmount", true, "remove SMBMapping during unmount on Windows node")
 	workingMountDir               = flag.String("working-mount-dir", "/tmp", "working directory for provisioner to mount smb shares temporarily")
+	mode                          = flag.String("mode", "iscsi", "operational mode, one of iscsi/smb. default iscsi")
 )
 
 func main() {
@@ -45,21 +48,51 @@ func main() {
 		// nodeid is not needed in controller component
 		klog.Warning("nodeid is empty")
 	}
+
+	modeval, err := common.ParseDriverMode(*mode)
+	if err != nil {
+		klog.Fatalln(err)
+	}
+
 	exportMetrics()
-	handle()
+	handle(modeval)
 	os.Exit(0)
 }
 
-func handle() {
-	driverOptions := pwx.DriverOptions{
-		NodeID:                        *nodeID,
-		DriverName:                    *driverName,
-		EnableGetVolumeStats:          *enableGetVolumeStats,
-		RemoveSMBMappingDuringUnmount: *removeSMBMappingDuringUnmount,
-		WorkingMountDir:               *workingMountDir,
+func handle(modeVal common.DriverMode) {
+	versionMeta, err := pwx.GetVersionYAML(*driverName)
+	if err != nil {
+		klog.Fatalf("%v", err)
 	}
-	driver := pwx.NewDriver(&driverOptions)
-	driver.Run(*endpoint, *kubeconfig, false)
+	klog.V(2).Infof("\nDRIVER INFORMATION[mode %v]:\n-------------------\n%s\n\nStreaming logs below:",
+		modeVal, versionMeta)
+
+	driverOptions := common.DriverOptions{
+		NodeID:               *nodeID,
+		DriverName:           *driverName,
+		Mode:                 modeVal,
+		EnableGetVolumeStats: *enableGetVolumeStats,
+	}
+	driverOptions.SmbOpts.RemoveSMBMappingDuringUnmount = *removeSMBMappingDuringUnmount
+	driverOptions.SmbOpts.WorkingMountDir = *workingMountDir
+
+	driverOptions.IscsiOpts.Endpoint = *endpoint
+
+	driver := pwx.NewDriver(*driverName, pwx.DriverVersion(), &driverOptions)
+
+	// SmbDriver or IscsiDriver shall be initialized and run based on passed mode
+	driver.Init()
+
+	s := csicommon.NewNonBlockingGRPCServer()
+
+	ctrlSrv := driver.GetControllerServer()
+	identitySrv := driver.GetIdentityServer()
+	nodeSrv := driver.GetNodeServer()
+	testMode := false
+
+	// portworx plugin Driver d only act as NodeServer
+	s.Start(*endpoint, identitySrv, ctrlSrv, nodeSrv, testMode)
+	s.Wait()
 }
 
 func exportMetrics() {

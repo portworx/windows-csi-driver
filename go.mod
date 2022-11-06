@@ -5,10 +5,11 @@ go 1.19
 require (
 	github.com/container-storage-interface/spec v1.5.0
 	github.com/golang/protobuf v1.5.2
+	github.com/kubernetes-csi/csi-lib-iscsi v0.0.0-20220906040654-ce2614163c72
 	github.com/kubernetes-csi/csi-lib-utils v0.7.0
 	github.com/kubernetes-csi/csi-proxy/client v1.0.1
 	github.com/prometheus/client_golang v1.11.1
-	github.com/stretchr/testify v1.7.0
+	github.com/stretchr/testify v1.8.0
 	golang.org/x/net v0.0.0-20220906165146-f3363e06e74c
 	google.golang.org/grpc v1.40.0
 	k8s.io/apimachinery v0.23.3
@@ -22,6 +23,7 @@ require (
 require (
 	github.com/Microsoft/go-winio v0.4.17 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
+	github.com/blang/semver v3.5.1+incompatible // indirect
 	github.com/cespare/xxhash/v2 v2.1.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-logr/logr v1.2.0 // indirect
@@ -52,7 +54,7 @@ require (
 	google.golang.org/protobuf v1.27.1 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	k8s.io/api v0.23.3 // indirect
 	k8s.io/apiserver v0.23.3 // indirect
 	k8s.io/client-go v0.23.3 // indirect
