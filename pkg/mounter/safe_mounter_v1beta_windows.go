@@ -40,6 +40,8 @@ import (
 var _ CSIProxyMounter = &csiProxyMounter{}
 
 type csiProxyMounterV1Beta struct {
+	stubIscsiMounter
+
 	FsClient  *fsclient.Client
 	SMBClient *smbclient.Client
 }

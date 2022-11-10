@@ -48,15 +48,7 @@ import (
 type CSIProxyMounter interface {
 	mount.Interface
 
-	///  Iscsi specifics
-	IscsiAddTargetPortal(ctx context.Context, req *iscsi.AddTargetPortalRequest) (*iscsi.AddTargetPortalResponse, error)
-	IscsiConnectTarget(ctx context.Context, req *iscsi.ConnectTargetRequest) (*iscsi.ConnectTargetResponse, error)
-	IscsiDisconnectTarget(ctx context.Context, req *iscsi.DisconnectTargetRequest) (*iscsi.DisconnectTargetResponse, error)
-	IscsiDiscoverTargetPortal(ctx context.Context, req *iscsi.DiscoverTargetPortalRequest) (*iscsi.DiscoverTargetPortalResponse, error)
-	IscsiGetDisks(ctx context.Context, req *iscsi.GetTargetDisksRequest) (*iscsi.GetTargetDisksResponse, error)
-	IscsiListTargetPortals(ctx context.Context, req *iscsi.ListTargetPortalsRequest) (*iscsi.ListTargetPortalsResponse, error)
-	IscsiRemoveTargetPortal(ctx context.Context, req *iscsi.RemoveTargetPortalRequest) (*iscsi.RemoveTargetPortalResponse, error)
-	IscsiSetMutualChapSecret(ctx context.Context, req *iscsi.SetMutualChapSecretRequest) (*iscsi.SetMutualChapSecretResponse, error)
+	IscsiMounter
 
 	SMBMount(source, target, fsType string, mountOptions, sensitiveMountOptions []string) error
 	SMBUnmount(target string) error
@@ -88,28 +80,28 @@ func normalizeWindowsPath(path string) string {
 
 /// Iscsi specifics
 func (mounter *csiProxyMounter) IscsiAddTargetPortal(ctx context.Context, req *iscsi.AddTargetPortalRequest) (*iscsi.AddTargetPortalResponse, error) {
-	klog.V(2).Infof("IscsiAddTargetPortal: target addr: %v, target port: %d", req.TargetAddress, req.TargetPort)
+	klog.V(2).Infof("IscsiAddTargetPortal: target addr: %v, target port: %d", req.TargetPortal.TargetAddress, req.TargetPortal.TargetPort)
 	return mounter.ISCSIClient.AddTargetPortal(ctx, req)
 }
 
 func (mounter *csiProxyMounter) IscsiConnectTarget(ctx context.Context, req *iscsi.ConnectTargetRequest) (*iscsi.ConnectTargetResponse, error) {
         klog.V(2).Infof("IscsiConnectTarget: target addr: %v, target port: %d, iqn: %s, auth: %v",
-		req.TargetAddress, req.TargetPort, req.Iqn, req.AuthType)
+		req.TargetPortal.TargetAddress, req.TargetPortal.TargetPort, req.Iqn, req.AuthType)
 	return mounter.ISCSIClient.ConnectTarget(ctx, req)
 }
 
 func (mounter *csiProxyMounter) IscsiDisconnectTarget(ctx context.Context, req *iscsi.DisconnectTargetRequest) (*iscsi.DisconnectTargetResponse, error) {
-        klog.V(2).Infof("IscsiDisconnectTarget: target addr: %v, target port: %d", req.TargetAddress, req.TargetPort)
+        klog.V(2).Infof("IscsiDisconnectTarget: target addr: %v, target port: %d", req.TargetPortal.TargetAddress, req.TargetPortal.TargetPort)
         return mounter.ISCSIClient.DisconnectTarget(ctx, req)
 }
 
 func (mounter *csiProxyMounter) IscsiDiscoverTargetPortal(ctx context.Context, req *iscsi.DiscoverTargetPortalRequest) (*iscsi.DiscoverTargetPortalResponse, error) {
-        klog.V(2).Infof("IscsiDiscoverTargetPortal: target addr: %v, target port: %d", req.TargetAddress, req.TargetPort)
+        klog.V(2).Infof("IscsiDiscoverTargetPortal: target addr: %v, target port: %d", req.TargetPortal.TargetAddress, req.TargetPortal.TargetPort)
         return mounter.ISCSIClient.DiscoverTargetPortal(ctx, req)
 }
 
 func (mounter *csiProxyMounter) IscsiGetTargetDisks(ctx context.Context, req *iscsi.GetTargetDisksRequest) (*iscsi.GetTargetDisksResponse, error) {
-        klog.V(2).Infof("IscsiGetTargetDisks: target addr: %v, target port: %d, iqn %s", req.TargetAddress, req.TargetPort, req.Iqn)
+        klog.V(2).Infof("IscsiGetTargetDisks: target addr: %v, target port: %d, iqn %s", req.TargetPortal.TargetAddress, req.TargetPortal.TargetPort, req.Iqn)
         return mounter.ISCSIClient.GetTargetDisks(ctx, req)
 }
 
@@ -119,7 +111,7 @@ func (mounter *csiProxyMounter) IscsiListTargetPortals(ctx context.Context, req 
 }
 
 func (mounter *csiProxyMounter) IscsiRemoveTargetPortal(ctx context.Context, req *iscsi.RemoveTargetPortalRequest) (*iscsi.RemoveTargetPortalResponse, error) {
-        klog.V(2).Infof("IscsiRemoveTargetPortal: target addr: %v, target port: %d", req.TargetAddress, req.TargetPort)
+        klog.V(2).Infof("IscsiRemoveTargetPortal: target addr: %v, target port: %d", req.TargetPortal.TargetAddress, req.TargetPortal.TargetPort)
         return mounter.ISCSIClient.RemoveTargetPortal(ctx, req)
 }
 

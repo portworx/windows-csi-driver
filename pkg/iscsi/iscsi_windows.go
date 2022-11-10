@@ -6,8 +6,8 @@ package iscsi
 import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"golang.org/x/net/context"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	_ "google.golang.org/grpc/codes"
+	_ "google.golang.org/grpc/status"
 )
 
 func (ns *iscsiDriver) iscsiNodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
