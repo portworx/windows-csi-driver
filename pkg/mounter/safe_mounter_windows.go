@@ -189,7 +189,8 @@ func (mounter *csiProxyMounter) IscsiListTargetPortals(ctx context.Context) ([]i
 func (mounter *csiProxyMounter) IscsiRemoveTargetPortal(ctx context.Context, addr string, port uint32) error {
 	klog.V(2).Infof("IscsiRemoveTargetPortal: target addr: %v, target port: %d", req.TargetPortal.TargetAddress, req.TargetPortal.TargetPort)
 	// Runs: Remove-IscsiTargetPortal -TargetPortalAddress 10.13.111.125 -TargetPortalPortNumber 3260 -Confirm:$false
-	cmdLine := fmt.Sprintf(`Remove-IscsiTargetPortal -TargetPortalAddress ${Env:iscsi_tp_address} -TargetPortalPortNumber ${Env:iscsi_tp_port} -Confirm:$false`)
+	cmdLine := fmt.Sprintf(`Remove-IscsiTargetPortal -TargetPortalAddress ${Env:iscsi_tp_address} ` +
+		`-TargetPortalPortNumber ${Env:iscsi_tp_port} -Confirm:$false`)
 
 	out, err := utils.RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr), fmt.Sprintf("iscsi_tp_port=%d", port))
 	if err != nil {
@@ -209,7 +210,8 @@ func (mounter *csiProxyMounter) IscsiVolumeExists(ctx context.Context, fsLabel s
 
 	var volumes []VolumeInfo
 	// Runs: Get-Volume -FilesystemLabel 398649739277880943
-	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(Get-Volume -FilesystemLabel ${Env:fs_label} | Select-Object OperationalStatus,HealthStatus,FilesystemType)`)
+	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(Get-Volume -FilesystemLabel ${Env:fs_label} | ` +
+		`Select-Object OperationalStatus,HealthStatus,FilesystemType)`)
 
 	out, err := utils.RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fsLabel))
 	if err != nil {
@@ -242,7 +244,8 @@ func (mounter *csiProxyMounter) IscsiVolumeExists(ctx context.Context, fsLabel s
 func (mounter *csiProxyMounter) IscsiDiskInitialized(ctx context.Context, serialnum string) (bool, error) {
 	// Runs:  Get-Disk -SerialNumber serialnum | select-object PartitionStyle
 	// expected: GPT or RAW.
-	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(Get-Disk -SerialNumber ${Env:disk_serial_number} | Select-Object PartitionStyle)`)
+	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(` +
+		`Get-Disk -SerialNumber ${Env:disk_serial_number} | Select-Object PartitionStyle)`)
 
 	out, err := utils.RunPowershellCmd(cmdLine, fmt.Sprintf("disk_serial_number=%s", serialnum))
 	if err != nil {
@@ -328,6 +331,88 @@ func (mounter *csiProxyMounter) IscsiFormatVolume(ctx context.Context, serialnum
 func (mounter *csiProxyMounter) IscsiSetMutualChapSecret(ctx context.Context, req *iscsi.SetMutualChapSecretRequest) (*iscsi.SetMutualChapSecretResponse, error) {
 	klog.V(2).Infof("IscsiSetMutualChapSecret: chap secret %v", req.MutualChapSecret)
 	return mounter.ISCSIClient.SetMutualChapSecret(ctx, req)
+}
+
+func (mounter *csiProxyMounter) IscsiVolumeMount(fslabel string, path string) error {
+	// NOTE: path has to be exist as a directory
+	if err := os.MkdirAll(path, 0755); err != nil && !os.IsExist(err) {
+		return err
+	}
+
+	// Runs: Get-Volume -FilesystemLabel 398649739277880943 |Get-Partition |Add-PartitionAccessPath -AccessPath c:\temp\test
+	cmdLine := fmt.Sprintf(`Get-Volume -FileSystemLabel ${Env:fs_label} | ` +
+		`Get-Partition | ` +
+		`Add-PartitionAccessPath -AccessPath ${Env:access_path}`)
+	out, err := utils.RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel), fmt.Sprintf("access_path=%s", path))
+	if err != nil {
+		return fmt.Errorf("volume mount fail cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
+	}
+	return nil
+}
+
+func (mounter *csiProxyMounter) IscsiVolumeUnmount(fslabel string, path string) error {
+	// Runs: Get-Volume -FilesystemLabel 398649739277880943 |Get-Partition |Remove-PartitionAccessPath -AccessPath c:\temp\test
+	cmdLine := fmt.Sprintf(`Get-Volume -FileSystemLabel ${Env:fs_label} | ` +
+		`Get-Partition | ` +
+		`Remove-PartitionAccessPath -AccessPath ${Env:access_path}`)
+	out, err := utils.RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel), fmt.Sprintf("access_path=%s", path))
+	if err != nil {
+		// check if path already removed.
+		if mounts, e := mounter.IscsiGetVolumeMounts(fslabel, false); e == nil {
+			for _, p := range mounts {
+				if p == path {
+					// hard failure - unmount really failed.
+					return fmt.Errorf("volume unmount fail cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
+				}
+			}
+			return nil
+		}
+
+		return fmt.Errorf("volume unmount fail cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
+	}
+	return nil
+}
+
+func (mounter *csiProxyMounter) IscsiGetVolumeMounts(fslabel string, filter bool) ([]string, error) {
+	// Runs: ConvertTo-Json -InputObject @(Get-Volume -FilesystemLabel 398649739277880943 |Get-Partition | Select-Object AccessPaths)
+	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(Get-Volume -FileSystemLabel ${Env:fs_label} | ` +
+		`Get-Partition | Select-Object AccessPaths)`)
+	out, err := utils.RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel))
+	if err != nil {
+		return fmt.Errorf("volume get mounts fail cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
+	}
+
+	type Mounts struct {
+		AccessPaths []string
+	}
+	var mounts []Mounts
+
+	err = json.Unmarshal(out, &mounts)
+	if err != nil {
+		return err
+	}
+
+	if len(mounts) == 0 {
+		return nil, nil
+	}
+
+	if len(mounts) != 1 {
+		klog.V(2).Warnf("IscsiGetVolumeMounts found multiple volumes(%v) - unexpected", mounts)
+	}
+	mount := mounts[0]
+
+	// will hold default volume access path like:  "\\\\?\\Volume{8210f2d0-ed6d-47ca-8ba2-8040fa14af11}\\"
+	if filter {
+		var res []string
+		for _, p := range mount.AccessPaths {
+			if strings.HasPrefix(p, "\\\\?\\Volume{") {
+				continue
+			}
+			res = append(res, p)
+		}
+		return res, nil
+	}
+	return mount.AccessPaths, nil
 }
 
 // Iscsi end
