@@ -42,6 +42,15 @@ import (
 	"k8s.io/klog/v2"
 	mount "k8s.io/mount-utils"
 	utilexec "k8s.io/utils/exec"
+
+	"github.com/kubernetes-csi/csi-proxy/pkg/utils"
+)
+
+var (
+	ErrNoSuchVolume       = fmt.Errorf("no such volume")
+	ErrVolumeInconsistent = fmt.Errorf("volume state inconsistent")
+
+	ErrNoSuchDisk = fmt.Errorf("no such disk")
 )
 
 // CSIProxyMounter extends the mount.Interface interface with CSI Proxy methods.
@@ -78,47 +87,249 @@ func normalizeWindowsPath(path string) string {
 	return normalizedPath
 }
 
-/// Iscsi specifics
-func (mounter *csiProxyMounter) IscsiAddTargetPortal(ctx context.Context, req *iscsi.AddTargetPortalRequest) (*iscsi.AddTargetPortalResponse, error) {
-	klog.V(2).Infof("IscsiAddTargetPortal: target addr: %v, target port: %d", req.TargetPortal.TargetAddress, req.TargetPortal.TargetPort)
-	return mounter.ISCSIClient.AddTargetPortal(ctx, req)
+// / Iscsi specifics
+func (mounter *csiProxyMounter) IscsiAddTargetPortal(ctx context.Context, addr string, port uint32) error {
+	klog.V(2).Infof("IscsiAddTargetPortal: target addr: %v, target port: %d", addr, port)
+	// Runs: New-IscsiTargetPortal -TargetPortalAddress 10.13.111.125 -TargetPortalPortNumber 3260
+	cmdLine := fmt.Sprintf(
+		`New-IscsiTargetPortal -TargetPortalAddress ${Env:iscsi_tp_address} ` +
+			`-TargetPortalPortNumber ${Env:iscsi_tp_port}`)
+	out, err := utils.RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
+		fmt.Sprintf("iscsi_tp_port=%d", port))
+	if err != nil {
+		return fmt.Errorf("error adding target portal. cmd %s, output: %s, err: %v", cmdLine, string(out), err)
+	}
+
+	return nil
 }
 
-func (mounter *csiProxyMounter) IscsiConnectTarget(ctx context.Context, req *iscsi.ConnectTargetRequest) (*iscsi.ConnectTargetResponse, error) {
-        klog.V(2).Infof("IscsiConnectTarget: target addr: %v, target port: %d, iqn: %s, auth: %v",
-		req.TargetPortal.TargetAddress, req.TargetPortal.TargetPort, req.Iqn, req.AuthType)
-	return mounter.ISCSIClient.ConnectTarget(ctx, req)
+func (mounter *csiProxyMounter) IscsiConnectTargetNaked(ctx context.Context, addr string, port uint32, iqn string) error {
+	klog.V(2).Infof("IscsiConnectTarget: target addr: %v, target port: %d, iqn: %s, auth: none", addr, port, iqn)
+
+	authType := "NONE" // AuthenticationType.None
+	chapUser := ""
+	chapSecret := ""
+
+	cmdLine := fmt.Sprintf(
+		`Connect-IscsiTarget -TargetPortalAddress ${Env:iscsi_tp_address}` +
+			` -TargetPortalPortNumber ${Env:iscsi_tp_port} -NodeAddress ${Env:iscsi_target_iqn}` +
+			` -AuthenticationType ${Env:iscsi_auth_type}`)
+
+	// not setting chapUser/chapSecrets
+	out, err := utils.RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
+		fmt.Sprintf("iscsi_tp_port=%d", port),
+		fmt.Sprintf("iscsi_target_iqn=%s", iqn),
+		fmt.Sprintf("iscsi_auth_type=%s", authType),
+		fmt.Sprintf("iscsi_chap_user=%s", chapUser),
+		fmt.Sprintf("iscsi_chap_secret=%s", chapSecret))
+	if err != nil {
+		return fmt.Errorf("error connecting to target portal. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
+	}
+
+	return nil
 }
 
-func (mounter *csiProxyMounter) IscsiDisconnectTarget(ctx context.Context, req *iscsi.DisconnectTargetRequest) (*iscsi.DisconnectTargetResponse, error) {
-        klog.V(2).Infof("IscsiDisconnectTarget: target addr: %v, target port: %d", req.TargetPortal.TargetAddress, req.TargetPortal.TargetPort)
-        return mounter.ISCSIClient.DisconnectTarget(ctx, req)
+func (mounter *csiProxyMounter) IscsiDisconnectTarget(ctx context.Context, iqn string) error {
+	klog.V(2).Infof("IscsiDisconnectTarget: target iqn: %s", iqn)
+
+	// Runs: Disconnect-IscsiTarget -NodeAddress $Target.NodeAddress
+	cmdLine := fmt.Sprintf(`Disconnect-IscsiTarget -NodeAddress ${Env:iscsi_target_iqn} -Confirm:$false`)
+
+	out, err := utils.RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_target_iqn=%s", iqn))
+	if err != nil {
+		return fmt.Errorf("error connecting to target portal. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
+	}
+
+	return nil
 }
 
-func (mounter *csiProxyMounter) IscsiDiscoverTargetPortal(ctx context.Context, req *iscsi.DiscoverTargetPortalRequest) (*iscsi.DiscoverTargetPortalResponse, error) {
-        klog.V(2).Infof("IscsiDiscoverTargetPortal: target addr: %v, target port: %d", req.TargetPortal.TargetAddress, req.TargetPortal.TargetPort)
-        return mounter.ISCSIClient.DiscoverTargetPortal(ctx, req)
+func (mounter *csiProxyMounter) IscsiDiscoverTargetPortal(ctx context.Context, addr string, port uint32) ([]string, error) {
+	klog.V(2).Infof("IscsiDiscoverTargetPortal: target addr: %v, target port: %d", addr, port)
+	// ConvertTo-Json is not part of the pipeline because powershell converts an
+	// array with one element to a single element
+	cmdLine := fmt.Sprintf(
+		`ConvertTo-Json -InputObject @(Get-IscsiTargetPortal -TargetPortalAddress ` +
+			`${Env:iscsi_tp_address} -TargetPortalPortNumber ${Env:iscsi_tp_port} | ` +
+			`Get-IscsiTarget | Select-Object -ExpandProperty NodeAddress)`)
+	out, err := utils.RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
+		fmt.Sprintf("iscsi_tp_port=%d", port))
+	if err != nil {
+		return nil, fmt.Errorf("error discovering target portal. cmd: %s, output: %s, err: %w", cmdLine, string(out), err)
+	}
+
+	var iqns []string
+	err = json.Unmarshal(out, &iqns)
+	if err != nil {
+		return nil, fmt.Errorf("failed parsing iqn list. cmd: %s output: %s, err: %w", cmdLine, string(out), err)
+	}
+
+	return iqns, nil
 }
 
-func (mounter *csiProxyMounter) IscsiGetTargetDisks(ctx context.Context, req *iscsi.GetTargetDisksRequest) (*iscsi.GetTargetDisksResponse, error) {
-        klog.V(2).Infof("IscsiGetTargetDisks: target addr: %v, target port: %d, iqn %s", req.TargetPortal.TargetAddress, req.TargetPortal.TargetPort, req.Iqn)
-        return mounter.ISCSIClient.GetTargetDisks(ctx, req)
+func (mounter *csiProxyMounter) IscsiListTargetPortals(ctx context.Context) ([]iscsi.TargetPortal, error) {
+	klog.V(2).Infof("IscsiListTargetPortals requested")
+	cmdLine := fmt.Sprintf(
+		`ConvertTo-Json -InputObject @(Get-IscsiTargetPortal | ` +
+			`Select-Object TargetPortalAddress, TargetPortalPortNumber)`)
+
+	out, err := utils.RunPowershellCmd(cmdLine)
+	if err != nil {
+		return nil, fmt.Errorf("error listing target portals. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
+	}
+
+	var portals []TargetPortal
+	err = json.Unmarshal(out, &portals)
+	if err != nil {
+		return nil, fmt.Errorf("failed parsing target portal list. cmd: %s output: %s, err: %w", cmdLine, string(out), err)
+	}
+
+	return portals, nil
 }
 
-func (mounter *csiProxyMounter) IscsiListTargetPortals(ctx context.Context, req *iscsi.ListTargetPortalsRequest) (*iscsi.ListTargetPortalsResponse, error) {
-        klog.V(2).Infof("IscsiListTargetPortals requested")
-        return mounter.ISCSIClient.ListTargetPortals(ctx, req)
+func (mounter *csiProxyMounter) IscsiRemoveTargetPortal(ctx context.Context, addr string, port uint32) error {
+	klog.V(2).Infof("IscsiRemoveTargetPortal: target addr: %v, target port: %d", req.TargetPortal.TargetAddress, req.TargetPortal.TargetPort)
+	// Runs: Remove-IscsiTargetPortal -TargetPortalAddress 10.13.111.125 -TargetPortalPortNumber 3260 -Confirm:$false
+	cmdLine := fmt.Sprintf(`Remove-IscsiTargetPortal -TargetPortalAddress ${Env:iscsi_tp_address} -TargetPortalPortNumber ${Env:iscsi_tp_port} -Confirm:$false`)
+
+	out, err := utils.RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr), fmt.Sprintf("iscsi_tp_port=%d", port))
+	if err != nil {
+		return fmt.Errorf("error connecting to target portal. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
+	}
+
+	return nil
 }
 
-func (mounter *csiProxyMounter) IscsiRemoveTargetPortal(ctx context.Context, req *iscsi.RemoveTargetPortalRequest) (*iscsi.RemoveTargetPortalResponse, error) {
-        klog.V(2).Infof("IscsiRemoveTargetPortal: target addr: %v, target port: %d", req.TargetPortal.TargetAddress, req.TargetPortal.TargetPort)
-        return mounter.ISCSIClient.RemoveTargetPortal(ctx, req)
+// /IscsiVolumeExists implies volume formatted and ready to use.
+func (mounter *csiProxyMounter) IscsiVolumeExists(ctx context.Context, fsLabel string) (bool, error) {
+	type VolumeInfo struct {
+		OperationalStatus string
+		HealthStatus      string
+		FileSystemType    string
+	}
+
+	var volumes []VolumeInfo
+	// Runs: Get-Volume -FilesystemLabel 398649739277880943
+	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(Get-Volume -FilesystemLabel ${Env:fs_label} | Select-Object OperationalStatus,HealthStatus,FilesystemType)`)
+
+	out, err := utils.RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fsLabel))
+	if err != nil {
+		return false, ErrNoSuchVolume
+	}
+
+	klog.V(2).Infof("IscsiVolumeExists found volume with fs label %v - with properties %v", fsLabel, string(out))
+	err = json.Unmarshal(out, &volumes)
+	if err != nil {
+		return false, err
+	}
+
+	if len(volumes) == 0 {
+		klog.V(2).Warnf("IscsiVolumeExists did not find any volume for label %v", fsLabel)
+		return false, ErrNoSuchVolume
+	}
+
+	if len(volumes) != 1 {
+		klog.V(2).Warnf("IscsiVolumeExists found multiple volumes(%v) - unexpected", volumes)
+	}
+	vol := volumes[0]
+	if vol.OperationalStatus != "OK" || vol.HealthStatus != "Healthy" || vol.FileSystemType != "NTFS" {
+		klog.V(2).Warnf("IscsiVolumeExists found volume state inconsistent - %+v", vol)
+		return false, ErrVolumeInconsistent
+	}
+
+	return true, nil
+}
+
+func (mounter *csiProxyMounter) IscsiDiskInitialized(ctx context.Context, serialnum string) (bool, error) {
+	// Runs:  Get-Disk -SerialNumber serialnum | select-object PartitionStyle
+	// expected: GPT or RAW.
+	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(Get-Disk -SerialNumber ${Env:disk_serial_number} | Select-Object PartitionStyle)`)
+
+	out, err := utils.RunPowershellCmd(cmdLine, fmt.Sprintf("disk_serial_number=%s", serialnum))
+	if err != nil {
+		return false, ErrNoSuchDisk
+	}
+
+	var partitionStyle []string
+	if err := json.Unmarshal(out, &partitionStyle); err != nil {
+		return false, err
+	}
+
+	if len(partitionStyle) == 0 {
+		return false, ErrNoSuchDisk
+	}
+
+	if len(partitionStyle) != 1 {
+		klog.V(2).Warnf("IscsiDiskInitialized found multiple disks(%v) - unexpected", partitionStyle)
+	}
+
+	ps := partitionStyle[0]
+
+	klog.V(2).Infof("partitionStyle found disk with serialnumber %v - with partitionstyle %v", serialnum, ps)
+	raw := strings.Contains(ps, "RAW")
+	return !raw, nil
+}
+
+func (mounter *csiProxyMounter) IscsiDiskInit(ctx context.Context, serialnum string) error {
+	// Runs: Initialize-Disk -PartitionStyle GPT
+	cmdLine := fmt.Sprintf(`Get-Disk -SerialNumber ${Env:disk_serial_number} | Initialize-Disk -PartitionStyle GPT`)
+
+	out, err := utils.RunPowershellCmd(cmdLine, fmt.Sprintf("disk_serial_number=%s", serialnum))
+	if err != nil {
+		return false, fmt.Errorf("error initializing disk: cmd %s, output: %s, err: %w", cmdLine, string(out), err)
+	}
+
+	return nil
+}
+
+func (mounter *csiProxyMounter) IscsiFormatVolume(ctx context.Context, serialnum, fslabel string) error {
+	// Runs:  Initialize-Disk and creates a new data partition for use
+
+	exists, err := mounter.IscsiVolumeExists(ctx, fslabel)
+	if err != nil && err != ErrNoSuchVolume {
+		return err
+	}
+	if exists {
+		return nil
+	}
+
+	ok, err := mounter.IscsiDiskInitialized(ctx, serialnum)
+	if err != nil {
+		return err
+	}
+
+	if !ok {
+		// Perform raw disk initialization
+		if err := mounter.IscsiDiskInit(ctx, serialnum); err != nil {
+			return err
+		}
+	}
+
+	// very longish operation
+	cmdLine = fmt.Sprintf(`Get-Disk -SerialNumber ${Env:disk_serial_number} | ` +
+		`New-Partition -UseMaximumSize | ` +
+		`Format-Volume -FileSystem ntfs -AllocationUnitSize 4096 -NewFileSystemLabel ${Env:fs_label}`)
+
+	out, err := utils.RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel))
+	if err != nil {
+		return fmt.Errorf("disk format fail, cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
+	}
+
+	exists, err = mounter.IscsiVolumeExists(ctx, fslabel)
+	if err != nil {
+		return err
+	}
+
+	if !exists {
+		return fmt.Errorf("disk format failure - unknown")
+	}
+	return nil
 }
 
 func (mounter *csiProxyMounter) IscsiSetMutualChapSecret(ctx context.Context, req *iscsi.SetMutualChapSecretRequest) (*iscsi.SetMutualChapSecretResponse, error) {
-        klog.V(2).Infof("IscsiSetMutualChapSecret: chap secret %v", req.MutualChapSecret)
-        return mounter.ISCSIClient.SetMutualChapSecret(ctx, req)
+	klog.V(2).Infof("IscsiSetMutualChapSecret: chap secret %v", req.MutualChapSecret)
+	return mounter.ISCSIClient.SetMutualChapSecret(ctx, req)
 }
+
 // Iscsi end
 
 func (mounter *csiProxyMounter) SMBMount(source, target, fsType string, mountOptions, sensitiveMountOptions []string) error {

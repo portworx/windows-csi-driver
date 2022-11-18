@@ -7,17 +7,19 @@ import (
 	iscsi "github.com/kubernetes-csi/csi-proxy/client/api/iscsi/v1alpha2"
 )
 
-
-
 type IscsiMounter interface {
 	///  Iscsi specifics
-	IscsiAddTargetPortal(ctx context.Context, req *iscsi.AddTargetPortalRequest) (*iscsi.AddTargetPortalResponse, error)
-	IscsiConnectTarget(ctx context.Context, req *iscsi.ConnectTargetRequest) (*iscsi.ConnectTargetResponse, error)
-	IscsiDisconnectTarget(ctx context.Context, req *iscsi.DisconnectTargetRequest) (*iscsi.DisconnectTargetResponse, error)
-	IscsiDiscoverTargetPortal(ctx context.Context, req *iscsi.DiscoverTargetPortalRequest) (*iscsi.DiscoverTargetPortalResponse, error)
-	IscsiGetTargetDisks(ctx context.Context, req *iscsi.GetTargetDisksRequest) (*iscsi.GetTargetDisksResponse, error)
-	IscsiListTargetPortals(ctx context.Context, req *iscsi.ListTargetPortalsRequest) (*iscsi.ListTargetPortalsResponse, error)
-	IscsiRemoveTargetPortal(ctx context.Context, req *iscsi.RemoveTargetPortalRequest) (*iscsi.RemoveTargetPortalResponse, error)
+	IscsiAddTargetPortal(ctx context.Context, addr string, port uint32) error
+	IscsiConnectTargetNoAuth(ctx context.Context, addr string, port uint32, iqn string) error
+	IscsiDisconnectTarget(ctx context.Context, iqn string) error
+	IscsiDiscoverTargetPortal(ctx context.Context, addr string, port uint32) ([]string, error)
+	IscsiListTargetPortals(ctx context.Context) ([]iscsi.TargetPortal, error)
+	IscsiRemoveTargetPortal(ctx context.Context, addr string, port uint32) error
+	IscsiVolumeExists(ctx context.Context, fsLabel string) (bool, error)
+	IscsiDiskInitialized(ctx context.Context, serialnum string) (bool, error)
+	IscsiDiskInit(ctx context.Context, serialnum string) error
+	IscsiFormatVolume(ctx context.Context, serialnum, fslabel string) error
+
 	IscsiSetMutualChapSecret(ctx context.Context, req *iscsi.SetMutualChapSecretRequest) (*iscsi.SetMutualChapSecretResponse, error)
 }
 
@@ -26,28 +28,41 @@ var errStubImpl = fmt.Errorf("stubhandler not implemented")
 type stubIscsiMounter struct {
 }
 
-func (m *stubIscsiMounter) IscsiAddTargetPortal(ctx context.Context, req *iscsi.AddTargetPortalRequest) (*iscsi.AddTargetPortalResponse, error) {
+func (m *stubIscsiMounter) IscsiAddTargetPortal(ctx context.Context, addr string, port uint32) error {
+	return errStubImpl
+}
+func (m *stubIscsiMounter) IscsiConnectTargetNoAuth(ctx context.Context, addr string, port uint32, iqn string) error {
+	return errStubImpl
+}
+func (m *stubIscsiMounter) IscsiDisconnectTarget(ctx context.Context, iqn string) error {
 	return nil, errStubImpl
 }
-func (m *stubIscsiMounter) IscsiConnectTarget(ctx context.Context, req *iscsi.ConnectTargetRequest) (*iscsi.ConnectTargetResponse, error) {
+func (m *stubIscsiMounter) IscsiDiscoverTargetPortal(ctx context.Context, addr string, port uint32) ([]string, error) {
 	return nil, errStubImpl
 }
-func (m *stubIscsiMounter) IscsiDisconnectTarget(ctx context.Context, req *iscsi.DisconnectTargetRequest) (*iscsi.DisconnectTargetResponse, error) {
+func (m *stubIscsiMounter) IscsiListTargetPortals(ctx context.Context) ([]iscsi.TargetPortal, error) {
 	return nil, errStubImpl
 }
-func (m *stubIscsiMounter) IscsiDiscoverTargetPortal(ctx context.Context, req *iscsi.DiscoverTargetPortalRequest) (*iscsi.DiscoverTargetPortalResponse, error) {
-	return nil, errStubImpl
+func (m *stubIscsiMounter) IscsiRemoveTargetPortal(ctx context.Context, addr string, port uint32) error {
+	return errStubImpl
 }
-func (m *stubIscsiMounter) IscsiGetTargetDisks(ctx context.Context, req *iscsi.GetTargetDisksRequest) (*iscsi.GetTargetDisksResponse, error) {
-	return nil, errStubImpl
+
+func (m *stubIscsiMounter) IscsiVolumeExists(ctx context.Context, fsLabel string) (bool, error) {
+	return false, errStubImpl
 }
-func (m *stubIscsiMounter) IscsiListTargetPortals(ctx context.Context, req *iscsi.ListTargetPortalsRequest) (*iscsi.ListTargetPortalsResponse, error) {
-	return nil, errStubImpl
+
+func (m *stubIscsiMounter) IscsiDiskInitialized(ctx context.Context, serialnum string) (bool, error) {
+	return false, errStubImpl
 }
-func (m *stubIscsiMounter) IscsiRemoveTargetPortal(ctx context.Context, req *iscsi.RemoveTargetPortalRequest) (*iscsi.RemoveTargetPortalResponse, error) {
-	return nil, errStubImpl
+
+func (m *stubIscsiMounter) IscsiDiskInit(ctx context.Context, serialnum string) error {
+	return errStubImpl
 }
+
+func (m *stubIscsiMounter) IscsiFormatVolume(ctx context.Context, serialnum string, fslabel string) error {
+	return errStubImpl
+}
+
 func (m *stubIscsiMounter) IscsiSetMutualChapSecret(ctx context.Context, req *iscsi.SetMutualChapSecretRequest) (*iscsi.SetMutualChapSecretResponse, error) {
 	return nil, errStubImpl
 }
-
