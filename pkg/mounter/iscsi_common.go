@@ -20,6 +20,9 @@ type IscsiMounter interface {
 	IscsiDiskInit(ctx context.Context, serialnum string) error
 	IscsiFormatVolume(ctx context.Context, serialnum, fslabel string) error
 
+	IscsiVolumeReadOnly(ctx context.Context, fslabel string) (bool, error)
+	IscsiVolumeSetReadOnly(ctx context.Context, fslabel string, ro bool) (bool, error)
+
 	IscsiVolumeMount(fslabel string, path string) error
 	IscsiVolumeUnmount(fslabel string, path string) error
 	IscsiGetVolumeMounts(fslabel string, filter bool) ([]string, error)
@@ -39,7 +42,7 @@ func (m *stubIscsiMounter) IscsiConnectTargetNoAuth(ctx context.Context, addr st
 	return errStubImpl
 }
 func (m *stubIscsiMounter) IscsiDisconnectTarget(ctx context.Context, iqn string) error {
-	return nil, errStubImpl
+	return errStubImpl
 }
 func (m *stubIscsiMounter) IscsiDiscoverTargetPortal(ctx context.Context, addr string, port uint32) ([]string, error) {
 	return nil, errStubImpl
@@ -77,6 +80,12 @@ func (m *stubIscsiMounter) IscsiVolumeUnmount(fslabel string, path string) error
 
 func (m *stubIscsiMounter) IscsiGetVolumeMounts(fslabel string, filter bool) ([]string, error) {
 	return nil, errStubImpl
+}
+func (m *stubIscsiMounter) IscsiVolumeReadOnly(ctx context.Context, fslabel string) (bool, error) {
+	return false, errStubImpl
+}
+func (m *stubIscsiMounter) IscsiVolumeSetReadOnly(ctx context.Context, fslabel string, ro bool) error {
+	return errStubImpl
 }
 
 func (m *stubIscsiMounter) IscsiSetMutualChapSecret(ctx context.Context, req *iscsi.SetMutualChapSecretRequest) (*iscsi.SetMutualChapSecretResponse, error) {

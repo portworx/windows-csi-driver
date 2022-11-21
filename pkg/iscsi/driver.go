@@ -21,15 +21,20 @@ import (
 	"os"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	klog "k8s.io/klog/v2"
 	"github.com/sulakshm/csi-driver/pkg/common"
 	csicommon "github.com/sulakshm/csi-driver/pkg/csi-common"
+	klog "k8s.io/klog/v2"
+
+	"github.com/sulakshm/csi-driver/pkg/mounter"
+	mount "k8s.io/mount-utils"
 )
 
 type iscsiDriver struct {
 	csicommon.CSIDriver
+	mounter *mount.SafeFormatAndMount
+
 	enableGetVolumeStats bool
-	endpoint string
+	endpoint             string
 }
 
 var driverName string
@@ -37,7 +42,7 @@ var driverName string
 func NewDriver(name, version string, options *common.DriverOptions) *iscsiDriver {
 	d := iscsiDriver{}
 	klog.V(1).Infof("iscsiDriver: %s version: %s nodeID: %s endpoint: %s", name, version, options.NodeID,
-			options.IscsiOpts.Endpoint)
+		options.IscsiOpts.Endpoint)
 
 	d.Name = name
 	d.Version = version
@@ -60,15 +65,21 @@ func NewDriver(name, version string, options *common.DriverOptions) *iscsiDriver
 	// ControllerServiceCapability RPC types.
 	d.AddControllerServiceCapabilities([]csi.ControllerServiceCapability_RPC_Type{csi.ControllerServiceCapability_RPC_UNKNOWN})
 
-        nodeCap := []csi.NodeServiceCapability_RPC_Type{
-                csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
-                csi.NodeServiceCapability_RPC_SINGLE_NODE_MULTI_WRITER,
-                csi.NodeServiceCapability_RPC_VOLUME_MOUNT_GROUP,
-        }
-        if d.enableGetVolumeStats {
-                nodeCap = append(nodeCap, csi.NodeServiceCapability_RPC_GET_VOLUME_STATS)
-        }
-        d.AddNodeServiceCapabilities(nodeCap)
+	nodeCap := []csi.NodeServiceCapability_RPC_Type{
+		csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
+		csi.NodeServiceCapability_RPC_SINGLE_NODE_MULTI_WRITER,
+		csi.NodeServiceCapability_RPC_VOLUME_MOUNT_GROUP,
+	}
+	if d.enableGetVolumeStats {
+		nodeCap = append(nodeCap, csi.NodeServiceCapability_RPC_GET_VOLUME_STATS)
+	}
+	d.AddNodeServiceCapabilities(nodeCap)
+
+	var err error
+	d.mounter, err = mounter.NewSafeMounter(false)
+	if err != nil {
+		klog.Fatalf("Failed to get safe mounter. Error: %v", err)
+	}
 
 	return &d
 }
