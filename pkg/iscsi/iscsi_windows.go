@@ -263,7 +263,7 @@ func (ns *iscsiDriver) iscsiNodeUnstageVolume(ctx context.Context, req *csi.Node
 	klog.V(2).Infof("Volume(%v) found matching iqn %s", req.GetVolumeId(), iqn)
 	err = m.IscsiDisconnectTarget(iqn)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	klog.V(2).Infof("Volume(%v) NodeUnstageVolume from path %v, iqn %s finished err = %v",
