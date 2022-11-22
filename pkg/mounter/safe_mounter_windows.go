@@ -104,7 +104,8 @@ func (mounter *csiProxyMounter) IscsiAddTargetPortal(addr string, port uint32) e
 }
 
 func (mounter *csiProxyMounter) refreshTargets() error {
-	out, err := RunPowershellCmd("Update-IscsiTarget")
+	cmdLine := "Update-IscsiTarget"
+	out, err := RunPowershellCmd(cmdLine)
 	if err != nil {
 		return fmt.Errorf("error running target refresh. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
 	}
@@ -472,7 +473,7 @@ func (mounter *csiProxyMounter) IscsiGetTargetNodeAddress(fslabel string) (strin
 	}
 
 	var iqns []string
-	err = json.Unmarshal(string(out), &iqns)
+	err = json.Unmarshal(out, &iqns)
 	if err != nil {
 		return "", err
 	}
