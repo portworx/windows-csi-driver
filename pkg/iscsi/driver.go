@@ -31,7 +31,7 @@ import (
 
 type iscsiDriver struct {
 	csicommon.CSIDriver
-	mounter *mount.SafeFormatAndMount
+	mounter mount.Interface
 
 	enableGetVolumeStats bool
 	endpoint             string
