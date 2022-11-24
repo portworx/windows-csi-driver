@@ -431,6 +431,15 @@ func (mounter *csiProxyMounter) IscsiSetMutualChapSecret(req *iscsi.SetMutualCha
 func (mounter *csiProxyMounter) IscsiVolumeMount(fslabel string, path string) error {
 	normalizedPath := normalizeWindowsPath(path)
 
+	// check if path already mounted.
+	if mounts, e := mounter.IscsiGetVolumeMounts(fslabel, false); e == nil {
+		for _, p := range mounts {
+			if p == normalizedPath {
+				return nil
+			}
+		}
+	}
+
 	// NOTE: path has to be exist as a directory
 	if err := os.MkdirAll(normalizedPath, 0755); err != nil && !os.IsExist(err) {
 		return err
@@ -468,7 +477,7 @@ func (mounter *csiProxyMounter) IscsiVolumeUnmount(fslabel string, path string) 
 		// check if path already removed.
 		if mounts, e := mounter.IscsiGetVolumeMounts(fslabel, false); e == nil {
 			for _, p := range mounts {
-				if p == path {
+				if p == normalizedPath {
 					// hard failure - unmount really failed.
 					return fmt.Errorf("volume unmount fail cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
 				}
