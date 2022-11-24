@@ -162,14 +162,13 @@ func (mounter *csiProxyMounter) IscsiConnectTargetNoAuth(addr string, port uint3
 }
 
 func (mounter *csiProxyMounter) IscsiDisconnectTarget(iqn string) error {
-	klog.V(2).Infof("IscsiDisconnectTarget: target iqn: %s", iqn)
-
 	// Runs: Disconnect-IscsiTarget -NodeAddress $Target.NodeAddress
 	cmdLine := fmt.Sprintf(`Disconnect-IscsiTarget -NodeAddress ${Env:iscsi_target_iqn} -Confirm:$false`)
 	var lastError error
 
 	// need retry to get session cleared
 	f := func() (bool, error) {
+		klog.V(2).Infof("IscsiDisconnectTarget: target iqn: %s", iqn)
 		_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_target_iqn=%s", iqn))
 		if err != nil {
 			lastError = fmt.Errorf("error connecting to target portal. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
