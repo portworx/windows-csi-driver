@@ -166,13 +166,33 @@ func (mounter *csiProxyMounter) IscsiDisconnectTarget(iqn string) error {
 
 	// Runs: Disconnect-IscsiTarget -NodeAddress $Target.NodeAddress
 	cmdLine := fmt.Sprintf(`Disconnect-IscsiTarget -NodeAddress ${Env:iscsi_target_iqn} -Confirm:$false`)
+	var lastError error
 
-	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_target_iqn=%s", iqn))
-	if err != nil {
-		return fmt.Errorf("error connecting to target portal. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
+	// need retry to get session cleared
+	f := func() (bool, error) {
+		_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_target_iqn=%s", iqn))
+		if err != nil {
+			lastError = fmt.Errorf("error connecting to target portal. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
+			return true, nil
+		}
+		lastError = nil
+		return false, nil
 	}
 
-	return nil
+	err := wait.ExponentialBackoff(
+		wait.Backoff{
+			Duration: 200 * time.Millisecond,
+			Factor:   1.2,
+			Steps:    10,
+			Cap:      1 * time.Second,
+		}, f,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	return lastError
 }
 
 func (mounter *csiProxyMounter) IscsiDiscoverTargetPortal(addr string, port uint32) ([]string, error) {
