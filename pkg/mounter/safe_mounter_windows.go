@@ -754,6 +754,7 @@ func (mounter *csiProxyMounter) MountSensitiveWithoutSystemdWithMountFlags(sourc
 // NewCSIProxyMounter - creates a new CSI Proxy mounter struct which encompassed all the
 // clients to the CSI proxy - filesystem, disk and volume clients.
 func NewCSIProxyMounter(removeSMBMappingDuringUnmount bool) (*csiProxyMounter, error) {
+/*
 	fsClient, err := fsclient.NewClient()
 	if err != nil {
 		return nil, err
@@ -776,6 +777,10 @@ func NewCSIProxyMounter(removeSMBMappingDuringUnmount bool) (*csiProxyMounter, e
 		ISCSIClient:                   iscsiClient,
 		VolClient:                     volClient,
 		SMBClient:                     smbClient,
+		RemoveSMBMappingDuringUnmount: removeSMBMappingDuringUnmount,
+	}, nil
+*/
+	return &csiProxyMounter{
 		RemoveSMBMappingDuringUnmount: removeSMBMappingDuringUnmount,
 	}, nil
 }
