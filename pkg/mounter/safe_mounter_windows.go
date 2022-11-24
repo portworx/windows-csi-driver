@@ -80,6 +80,9 @@ func normalizeWindowsPath(path string) string {
 	if strings.HasPrefix(normalizedPath, "\\") {
 		normalizedPath = "c:" + normalizedPath
 	}
+	if !strings.HasSuffix(normalizedPath, "\\") {
+		normalizedPath += "\\"
+	}
 	return normalizedPath
 }
 
