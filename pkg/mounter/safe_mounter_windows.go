@@ -282,22 +282,26 @@ func (mounter *csiProxyMounter) IscsiDiskInitialized(serialnum string) (bool, er
 		return false, fmt.Errorf("error checking disk status. cmd %s, output: %s, err: %w", cmdLine, string(stderr), err)
 	}
 
-	var partitionStyle []string
-	if err := json.Unmarshal(out, &partitionStyle); err != nil {
+	type diskInfo struct {
+		PartitionStyle string
+	}
+
+	var di []diskInfo
+	if err := json.Unmarshal(out, &di); err != nil {
 		klog.V(2).Infof("error parsing %v, error %v", string(out), err)
 		return false, err
 	}
 
-	if len(partitionStyle) == 0 {
+	if len(di) == 0 {
 		klog.V(2).Infof("disk with serialnum %v - not found", serialnum)
 		return false, ErrNoSuchDisk
 	}
 
-	if len(partitionStyle) != 1 {
-		klog.Warningf("IscsiDiskInitialized found multiple disks(%v) - unexpected", partitionStyle)
+	if len(di) != 1 {
+		klog.Warningf("IscsiDiskInitialized found multiple disks(%v) - unexpected", di)
 	}
 
-	ps := partitionStyle[0]
+	ps := di[0].PartitionStyle
 
 	klog.V(2).Infof("partitionStyle found disk with serialnumber %v - with partitionstyle %v", serialnum, ps)
 	raw := strings.Contains(ps, "RAW")
