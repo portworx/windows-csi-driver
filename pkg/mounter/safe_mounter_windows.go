@@ -434,7 +434,7 @@ func (mounter *csiProxyMounter) IscsiVolumeMount(fslabel string, path string) er
 	// check if path already mounted.
 	if mounts, e := mounter.IscsiGetVolumeMounts(fslabel, false); e == nil {
 		for _, p := range mounts {
-			if p == normalizedPath {
+			if strings.ToLower(p) == strings.ToLower(normalizedPath) {
 				return nil
 			}
 		}
