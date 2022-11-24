@@ -443,7 +443,7 @@ func (mounter *csiProxyMounter) IscsiVolumeUnmount(fslabel string, path string) 
 	normalizedPath := normalizeWindowsPath(path)
 
 	// Runs: Get-Volume -FilesystemLabel 398649739277880943 |Get-Partition |Remove-PartitionAccessPath -AccessPath c:\temp\test
-	cmdLine := fmt.Sprintf(`Get-Volume -FileSystemLabel ${Env:fs_label} | ` +
+	cmdLine := fmt.Sprintf(`Get-Volume -FileSystemLabel ${Env:fs_label} -ErrorAction Stop | ` +
 		`Get-Partition | ` +
 		`Remove-PartitionAccessPath -AccessPath ${Env:access_path}`)
 	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel), fmt.Sprintf("access_path=%s", normalizedPath))
