@@ -28,6 +28,9 @@ import (
 	filepath "path/filepath"
 	"strconv"
 	"strings"
+	"time"
+
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	fs "github.com/kubernetes-csi/csi-proxy/client/api/filesystem/v1"
 	fsclient "github.com/kubernetes-csi/csi-proxy/client/groups/filesystem/v1"
@@ -313,24 +316,45 @@ func (mounter *csiProxyMounter) IscsiDiskInit(serialnum string) error {
 func (mounter *csiProxyMounter) IscsiFormatVolume(serialnum, fslabel string) error {
 	// Runs:  Initialize-Disk and creates a new data partition for use
 
+	// retry loop until disk appears
+	f := func() (bool, error) {
+		ok, err := mounter.IscsiDiskInitialized(serialnum)
+		if err == ErrNoSuchDisk {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+
+		if !ok {
+			// Perform raw disk initialization
+			if err := mounter.IscsiDiskInit(serialnum); err != nil {
+				return false, err
+			}
+		}
+
+		return false, nil
+	}
+
+	err := wait.ExponentialBackoff(
+		wait.Backoff{
+			Duration: 200 * time.Millisecond,
+			Factor:   1.2,
+			Steps:    10,
+			Cap:      1 * time.Second,
+		}, f,
+	)
+
+	if err != nil {
+		return err
+	}
+
 	exists, err := mounter.IscsiVolumeExists(fslabel)
 	if err != nil {
 		return err
 	}
 	if exists {
 		return nil
-	}
-
-	ok, err := mounter.IscsiDiskInitialized(serialnum)
-	if err != nil {
-		return err
-	}
-
-	if !ok {
-		// Perform raw disk initialization
-		if err := mounter.IscsiDiskInit(serialnum); err != nil {
-			return err
-		}
 	}
 
 	// very longish operation
@@ -351,6 +375,7 @@ func (mounter *csiProxyMounter) IscsiFormatVolume(serialnum, fslabel string) err
 	if !exists {
 		return fmt.Errorf("disk format failure - unknown")
 	}
+
 	return nil
 }
 
