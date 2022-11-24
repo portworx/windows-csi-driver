@@ -106,10 +106,31 @@ func (mounter *csiProxyMounter) refreshTargets() error {
 	return nil
 }
 
+func (mounter *csiProxyMounter) IscsiHasActiveSession(addr string, port uint32) (bool, error) {
+	// Runs:  Get-IscsiTargetPortal -TargetPortalAddress 10.13.111.120 -TargetPortalPortNumber 3260 | Get-IscsiSession
+	cmdLine := fmt.Sprintf(
+		`Get-IscsiTargetPortal -TargetPortalAddress ${Env:iscsi_tp_address} ` +
+			`-TargetPortalPortNumber ${Env:iscsi_tp_port} | Get-IscsiSession`)
+
+	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
+		fmt.Sprintf("iscsi_tp_port=%d", port))
+	if err != nil {
+		return false, fmt.Errorf("error checking for active session. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
+	}
+
+	// refresh target portal
+	mounter.refreshTargets()
+	return true, nil
+}
+
 func (mounter *csiProxyMounter) IscsiConnectTargetNoAuth(addr string, port uint32, iqn string) error {
 	klog.V(2).Infof("IscsiConnectTarget: target addr: %v, target port: %d, iqn: %s, auth: none", addr, port, iqn)
 
-	mounter.refreshTargets()
+	sessionOk, _ := mounter.IscsiHasActiveSession(addr, port)
+	if sessionOk {
+		klog.V(2).Infof("Using existing iscsi session for %s:%d\n", addr, port)
+		return nil
+	}
 
 	authType := "NONE" // AuthenticationType.None
 	chapUser := ""
@@ -754,32 +775,32 @@ func (mounter *csiProxyMounter) MountSensitiveWithoutSystemdWithMountFlags(sourc
 // NewCSIProxyMounter - creates a new CSI Proxy mounter struct which encompassed all the
 // clients to the CSI proxy - filesystem, disk and volume clients.
 func NewCSIProxyMounter(removeSMBMappingDuringUnmount bool) (*csiProxyMounter, error) {
-/*
-	fsClient, err := fsclient.NewClient()
-	if err != nil {
-		return nil, err
-	}
-	iscsiClient, err := iscsiclient.NewClient()
-	if err != nil {
-		return nil, err
-	}
-	volClient, err := volclient.NewClient()
-	if err != nil {
-		return nil, err
-	}
-	smbClient, err := smbclient.NewClient()
-	if err != nil {
-		return nil, err
-	}
+	/*
+		fsClient, err := fsclient.NewClient()
+		if err != nil {
+			return nil, err
+		}
+		iscsiClient, err := iscsiclient.NewClient()
+		if err != nil {
+			return nil, err
+		}
+		volClient, err := volclient.NewClient()
+		if err != nil {
+			return nil, err
+		}
+		smbClient, err := smbclient.NewClient()
+		if err != nil {
+			return nil, err
+		}
 
-	return &csiProxyMounter{
-		FsClient:                      fsClient,
-		ISCSIClient:                   iscsiClient,
-		VolClient:                     volClient,
-		SMBClient:                     smbClient,
-		RemoveSMBMappingDuringUnmount: removeSMBMappingDuringUnmount,
-	}, nil
-*/
+		return &csiProxyMounter{
+			FsClient:                      fsClient,
+			ISCSIClient:                   iscsiClient,
+			VolClient:                     volClient,
+			SMBClient:                     smbClient,
+			RemoveSMBMappingDuringUnmount: removeSMBMappingDuringUnmount,
+		}, nil
+	*/
 	return &csiProxyMounter{
 		RemoveSMBMappingDuringUnmount: removeSMBMappingDuringUnmount,
 	}, nil
