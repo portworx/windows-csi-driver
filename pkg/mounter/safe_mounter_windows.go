@@ -278,15 +278,18 @@ func (mounter *csiProxyMounter) IscsiDiskInitialized(serialnum string) (bool, er
 
 	out, stderr, err := RunPowershellCmd(cmdLine, fmt.Sprintf("disk_serial_number=%s", serialnum))
 	if err != nil {
+		klog.V(2).Infof("error checking disk status. cmd %s, output: %s, err: %w", cmdLine, string(stderr), err)
 		return false, fmt.Errorf("error checking disk status. cmd %s, output: %s, err: %w", cmdLine, string(stderr), err)
 	}
 
 	var partitionStyle []string
 	if err := json.Unmarshal(out, &partitionStyle); err != nil {
+		klog.V(2).Infof("error parsing %v, error %v", string(out), err)
 		return false, err
 	}
 
 	if len(partitionStyle) == 0 {
+		klog.V(2).Infof("disk with serialnum %v - not found", serialnum)
 		return false, ErrNoSuchDisk
 	}
 
@@ -318,6 +321,7 @@ func (mounter *csiProxyMounter) IscsiFormatVolume(serialnum, fslabel string) err
 
 	// retry loop until disk appears
 	f := func() (bool, error) {
+		klog.V(2).Infof("finding disk with serialnum %v\n", serialnum)
 		ok, err := mounter.IscsiDiskInitialized(serialnum)
 		if err == ErrNoSuchDisk {
 			return true, nil
