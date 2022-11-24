@@ -171,11 +171,11 @@ func (mounter *csiProxyMounter) IscsiDisconnectTarget(iqn string) error {
 		klog.V(2).Infof("IscsiDisconnectTarget: target iqn: %s", iqn)
 		_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_target_iqn=%s", iqn))
 		if err != nil {
-			lastError = fmt.Errorf("error connecting to target portal. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
-			return true, nil
+			lastError = fmt.Errorf("error disconnecting target. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
+			return false, nil
 		}
 		lastError = nil
-		return false, nil
+		return true, nil
 	}
 
 	err := wait.ExponentialBackoff(
