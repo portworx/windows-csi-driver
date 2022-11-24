@@ -442,6 +442,15 @@ func (mounter *csiProxyMounter) IscsiVolumeMount(fslabel string, path string) er
 func (mounter *csiProxyMounter) IscsiVolumeUnmount(fslabel string, path string) error {
 	normalizedPath := normalizeWindowsPath(path)
 
+	/// pre-check if volume exists
+	exists, err := mounter.IscsiVolumeExists(fslabel)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+
 	// Runs: Get-Volume -FilesystemLabel 398649739277880943 |Get-Partition |Remove-PartitionAccessPath -AccessPath c:\temp\test
 	cmdLine := fmt.Sprintf(`Get-Volume -FileSystemLabel ${Env:fs_label} -ErrorAction Stop | ` +
 		`Get-Partition | ` +
