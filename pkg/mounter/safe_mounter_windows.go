@@ -46,13 +46,6 @@ import (
 	utilexec "k8s.io/utils/exec"
 )
 
-var (
-	ErrNoSuchVolume       = fmt.Errorf("no such volume")
-	ErrVolumeInconsistent = fmt.Errorf("volume state inconsistent")
-
-	ErrNoSuchDisk = fmt.Errorf("no such disk")
-)
-
 // CSIProxyMounter extends the mount.Interface interface with CSI Proxy methods.
 type CSIProxyMounter interface {
 	mount.Interface

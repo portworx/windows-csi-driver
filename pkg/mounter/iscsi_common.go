@@ -30,6 +30,13 @@ type IscsiMounter interface {
 	IscsiSetMutualChapSecret(req *iscsi.SetMutualChapSecretRequest) (*iscsi.SetMutualChapSecretResponse, error)
 }
 
+var (
+	ErrNoSuchVolume       = fmt.Errorf("no such volume")
+	ErrVolumeInconsistent = fmt.Errorf("volume state inconsistent")
+
+	ErrNoSuchDisk = fmt.Errorf("no such disk")
+)
+
 var errStubImpl = fmt.Errorf("stubhandler not implemented")
 
 type stubIscsiMounter struct {

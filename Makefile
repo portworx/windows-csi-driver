@@ -25,8 +25,8 @@ export GOPATH GOBIN GO111MODULE DOCKER_CLI_EXPERIMENTAL
 include release-tools/build.make
 
 GIT_COMMIT ?= $(shell git rev-parse HEAD)
-REGISTRY = docker.io/sulakshm
-#REGISTRY_NAME = $(shell echo $(REGISTRY) | sed "s/.azurecr.io//g")
+REGISTRY ?= docker.io/sulakshm
+REGISTRY_NAME = $(shell echo $(REGISTRY) | sed "s/.azurecr.io//g")
 IMAGE_VERSION ?= v0.1.1
 VERSION ?= latest
 # Use a custom version for E2E tests if we are testing in CI
@@ -40,7 +40,7 @@ IMAGE_TAG_LATEST = $(REGISTRY)/$(IMAGENAME):latest
 BUILD_DATE ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS = -X ${PKG}/pkg/portworx.driverVersion=${IMAGE_VERSION} -X ${PKG}/pkg/portworx.gitCommit=${GIT_COMMIT} -X ${PKG}/pkg/portworx.buildDate=${BUILD_DATE}
 EXT_LDFLAGS = -s -w -extldflags "-static"
-#E2E_HELM_OPTIONS ?= --set image.smb.repository=$(REGISTRY)/$(IMAGENAME) --set image.smb.tag=$(IMAGE_VERSION) --set controller.dnsPolicy=ClusterFirstWithHostNet --set linux.dnsPolicy=ClusterFirstWithHostNet
+E2E_HELM_OPTIONS ?= --set image.pwx.repository=$(REGISTRY)/$(IMAGENAME) --set image.pwx.tag=$(IMAGE_VERSION) --set controller.dnsPolicy=ClusterFirstWithHostNet --set linux.dnsPolicy=ClusterFirstWithHostNet
 E2E_HELM_OPTIONS += ${EXTRA_HELM_OPTIONS}
 # Generate all combination of all OS, ARCH, and OSVERSIONS for iteration
 ALL_OS = windows
