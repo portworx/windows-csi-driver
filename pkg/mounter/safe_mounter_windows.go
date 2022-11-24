@@ -87,7 +87,7 @@ func (mounter *csiProxyMounter) IscsiAddTargetPortal(addr string, port uint32) e
 	cmdLine := fmt.Sprintf(
 		`New-IscsiTargetPortal -TargetPortalAddress ${Env:iscsi_tp_address} ` +
 			`-TargetPortalPortNumber ${Env:iscsi_tp_port}`)
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
 		fmt.Sprintf("iscsi_tp_port=%d", port))
 	if err != nil {
 		return fmt.Errorf("error adding target portal. cmd %s, output: %s, err: %v", cmdLine, string(out), err)
@@ -98,7 +98,7 @@ func (mounter *csiProxyMounter) IscsiAddTargetPortal(addr string, port uint32) e
 
 func (mounter *csiProxyMounter) refreshTargets() error {
 	cmdLine := "Update-IscsiTarget"
-	out, err := RunPowershellCmd(cmdLine)
+	_, out, err := RunPowershellCmd(cmdLine)
 	if err != nil {
 		return fmt.Errorf("error running target refresh. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
 	}
@@ -112,7 +112,7 @@ func (mounter *csiProxyMounter) IscsiHasActiveSession(addr string, port uint32) 
 		`Get-IscsiTargetPortal -TargetPortalAddress ${Env:iscsi_tp_address} ` +
 			`-TargetPortalPortNumber ${Env:iscsi_tp_port} | Get-IscsiSession`)
 
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
 		fmt.Sprintf("iscsi_tp_port=%d", port))
 	if err != nil {
 		return false, fmt.Errorf("error checking for active session. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
@@ -142,7 +142,7 @@ func (mounter *csiProxyMounter) IscsiConnectTargetNoAuth(addr string, port uint3
 			` -AuthenticationType ${Env:iscsi_auth_type}`)
 
 	// not setting chapUser/chapSecrets
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
 		fmt.Sprintf("iscsi_tp_port=%d", port),
 		fmt.Sprintf("iscsi_target_iqn=%s", iqn),
 		fmt.Sprintf("iscsi_auth_type=%s", authType),
@@ -161,7 +161,7 @@ func (mounter *csiProxyMounter) IscsiDisconnectTarget(iqn string) error {
 	// Runs: Disconnect-IscsiTarget -NodeAddress $Target.NodeAddress
 	cmdLine := fmt.Sprintf(`Disconnect-IscsiTarget -NodeAddress ${Env:iscsi_target_iqn} -Confirm:$false`)
 
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_target_iqn=%s", iqn))
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_target_iqn=%s", iqn))
 	if err != nil {
 		return fmt.Errorf("error connecting to target portal. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
 	}
@@ -177,10 +177,10 @@ func (mounter *csiProxyMounter) IscsiDiscoverTargetPortal(addr string, port uint
 		`ConvertTo-Json -InputObject @(Get-IscsiTargetPortal -TargetPortalAddress ` +
 			`${Env:iscsi_tp_address} -TargetPortalPortNumber ${Env:iscsi_tp_port} | ` +
 			`Get-IscsiTarget | Select-Object -ExpandProperty NodeAddress)`)
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
+	out, stderr, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
 		fmt.Sprintf("iscsi_tp_port=%d", port))
 	if err != nil {
-		return nil, fmt.Errorf("error discovering target portal. cmd: %s, output: %s, err: %w", cmdLine, string(out), err)
+		return nil, fmt.Errorf("error discovering target portal. cmd: %s, output: %s, err: %w", cmdLine, string(stderr), err)
 	}
 
 	var iqns []string
@@ -198,9 +198,9 @@ func (mounter *csiProxyMounter) IscsiListTargetPortals() ([]iscsi.TargetPortal, 
 		`ConvertTo-Json -InputObject @(Get-IscsiTargetPortal | ` +
 			`Select-Object TargetPortalAddress, TargetPortalPortNumber)`)
 
-	out, err := RunPowershellCmd(cmdLine)
+	out, stderr, err := RunPowershellCmd(cmdLine)
 	if err != nil {
-		return nil, fmt.Errorf("error listing target portals. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
+		return nil, fmt.Errorf("error listing target portals. cmd %s, output: %s, err: %w", cmdLine, string(stderr), err)
 	}
 
 	var portals []iscsi.TargetPortal
@@ -218,7 +218,7 @@ func (mounter *csiProxyMounter) IscsiRemoveTargetPortal(addr string, port uint32
 	cmdLine := fmt.Sprintf(`Remove-IscsiTargetPortal -TargetPortalAddress ${Env:iscsi_tp_address} ` +
 		`-TargetPortalPortNumber ${Env:iscsi_tp_port} -Confirm:$false`)
 
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr), fmt.Sprintf("iscsi_tp_port=%d", port))
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr), fmt.Sprintf("iscsi_tp_port=%d", port))
 	if err != nil {
 		return fmt.Errorf("error connecting to target portal. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
 	}
@@ -239,9 +239,9 @@ func (mounter *csiProxyMounter) IscsiVolumeExists(fsLabel string) (bool, error) 
 	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(Get-Volume -FilesystemLabel ${Env:fs_label} | ` +
 		`Select-Object OperationalStatus,HealthStatus,FilesystemType)`)
 
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fsLabel))
+	out, stderr, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fsLabel))
 	if err != nil {
-		return false, ErrNoSuchVolume
+		return false, fmt.Errorf("error listing volumes. cmd %s, output: %s, err: %w", cmdLine, string(stderr), err)
 	}
 
 	klog.V(2).Infof("IscsiVolumeExists found volume with fs label %v - with properties %v", fsLabel, string(out))
@@ -273,9 +273,9 @@ func (mounter *csiProxyMounter) IscsiDiskInitialized(serialnum string) (bool, er
 	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(` +
 		`Get-Disk -SerialNumber ${Env:disk_serial_number} | Select-Object PartitionStyle)`)
 
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("disk_serial_number=%s", serialnum))
+	out, stderr, err := RunPowershellCmd(cmdLine, fmt.Sprintf("disk_serial_number=%s", serialnum))
 	if err != nil {
-		return false, ErrNoSuchDisk
+		return false, fmt.Errorf("error checking disk status. cmd %s, output: %s, err: %w", cmdLine, string(stderr), err)
 	}
 
 	var partitionStyle []string
@@ -302,7 +302,7 @@ func (mounter *csiProxyMounter) IscsiDiskInit(serialnum string) error {
 	// Runs: Initialize-Disk -PartitionStyle GPT
 	cmdLine := fmt.Sprintf(`Get-Disk -SerialNumber ${Env:disk_serial_number} | Initialize-Disk -PartitionStyle GPT`)
 
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("disk_serial_number=%s", serialnum))
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("disk_serial_number=%s", serialnum))
 	if err != nil {
 		return fmt.Errorf("error initializing disk: cmd %s, output: %s, err: %w", cmdLine, string(out), err)
 	}
@@ -338,7 +338,7 @@ func (mounter *csiProxyMounter) IscsiFormatVolume(serialnum, fslabel string) err
 		`New-Partition -UseMaximumSize | ` +
 		`Format-Volume -FileSystem ntfs -AllocationUnitSize 4096 -NewFileSystemLabel ${Env:fs_label}`)
 
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("disk_serial_number=%s", serialnum), fmt.Sprintf("fs_label=%s", fslabel))
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("disk_serial_number=%s", serialnum), fmt.Sprintf("fs_label=%s", fslabel))
 	if err != nil {
 		return fmt.Errorf("disk format fail, cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
 	}
@@ -364,9 +364,9 @@ func (mounter *csiProxyMounter) IscsiVolumeReadOnly(fslabel string) (bool, error
 	}
 
 	cmdLine := fmt.Sprintf(`(Get-Volume -FilesystemLabel ${Env:fs_label} | Get-Partition).IsReadOnly`)
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel))
+	out, stderr, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel))
 	if err != nil {
-		return false, fmt.Errorf("IscsiVolumeReadOnly fail, cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
+		return false, fmt.Errorf("IscsiVolumeReadOnly fail, cmd:%s, output:%s, err: %w", cmdLine, string(stderr), err)
 	}
 
 	return strconv.ParseBool(string(out))
@@ -382,7 +382,7 @@ func (mounter *csiProxyMounter) IscsiVolumeSetReadOnly(fslabel string, readonly 
 	}
 
 	cmdLine := fmt.Sprintf(`Get-Volume -FilesystemLabel ${Env:fs_label} | Get-Partition | Set-Partition -IsReadOnly ${Env:readonly}`)
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel), fmt.Sprintf("readonly=%t", readonly))
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel), fmt.Sprintf("readonly=%t", readonly))
 	if err != nil {
 		return fmt.Errorf("IscsiVolumeSetReadOnly fail, cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
 	}
@@ -396,8 +396,10 @@ func (mounter *csiProxyMounter) IscsiSetMutualChapSecret(req *iscsi.SetMutualCha
 }
 
 func (mounter *csiProxyMounter) IscsiVolumeMount(fslabel string, path string) error {
+	normalizedPath := normalizeWindowsPath(path)
+
 	// NOTE: path has to be exist as a directory
-	if err := os.MkdirAll(path, 0755); err != nil && !os.IsExist(err) {
+	if err := os.MkdirAll(normalizedPath, 0755); err != nil && !os.IsExist(err) {
 		return err
 	}
 
@@ -405,7 +407,7 @@ func (mounter *csiProxyMounter) IscsiVolumeMount(fslabel string, path string) er
 	cmdLine := fmt.Sprintf(`Get-Volume -FileSystemLabel ${Env:fs_label} | ` +
 		`Get-Partition | ` +
 		`Add-PartitionAccessPath -AccessPath ${Env:access_path}`)
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel), fmt.Sprintf("access_path=%s", path))
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel), fmt.Sprintf("access_path=%s", normalizedPath))
 	if err != nil {
 		return fmt.Errorf("volume mount fail cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
 	}
@@ -413,11 +415,13 @@ func (mounter *csiProxyMounter) IscsiVolumeMount(fslabel string, path string) er
 }
 
 func (mounter *csiProxyMounter) IscsiVolumeUnmount(fslabel string, path string) error {
+	normalizedPath := normalizeWindowsPath(path)
+
 	// Runs: Get-Volume -FilesystemLabel 398649739277880943 |Get-Partition |Remove-PartitionAccessPath -AccessPath c:\temp\test
 	cmdLine := fmt.Sprintf(`Get-Volume -FileSystemLabel ${Env:fs_label} | ` +
 		`Get-Partition | ` +
 		`Remove-PartitionAccessPath -AccessPath ${Env:access_path}`)
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel), fmt.Sprintf("access_path=%s", path))
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel), fmt.Sprintf("access_path=%s", normalizedPath))
 	if err != nil {
 		// check if path already removed.
 		if mounts, e := mounter.IscsiGetVolumeMounts(fslabel, false); e == nil {
@@ -437,11 +441,11 @@ func (mounter *csiProxyMounter) IscsiVolumeUnmount(fslabel string, path string) 
 
 func (mounter *csiProxyMounter) IscsiGetVolumeMounts(fslabel string, filter bool) ([]string, error) {
 	// Runs: ConvertTo-Json -InputObject @(Get-Volume -FilesystemLabel 398649739277880943 |Get-Partition | Select-Object AccessPaths)
-	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(Get-Volume -FileSystemLabel ${Env:fs_label} | ` +
+	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(Get-Volume -FileSystemLabel ${Env:fs_label} -ErrorAction Stop| ` +
 		`Get-Partition | Select-Object AccessPaths)`)
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel))
+	out, stderr, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel))
 	if err != nil {
-		return nil, fmt.Errorf("volume get mounts fail cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
+		return nil, fmt.Errorf("volume get mounts fail cmd:%s, output:%s, err: %w", cmdLine, string(stderr), err)
 	}
 
 	type Mounts struct {
@@ -451,7 +455,8 @@ func (mounter *csiProxyMounter) IscsiGetVolumeMounts(fslabel string, filter bool
 
 	err = json.Unmarshal(out, &mounts)
 	if err != nil {
-		return nil, err
+		klog.V(2).Infof("unmarshal failed - output %v", string(out))
+		return nil, ErrNoSuchVolume
 	}
 
 	if len(mounts) == 0 {
@@ -481,9 +486,9 @@ func (mounter *csiProxyMounter) IscsiGetTargetNodeAddress(fslabel string) (strin
 	// Runs: (Get-Volume -FilesystemLabel 398649739277880943 | Get-Partition | Get-Disk |Get-IscsiSession).TargetNodeAddress
 	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(Get-Volume -FileSystemLabel ${Env:fs_label} | ` +
 		`Get-Partition | Get-Disk  | Get-IscsiSession | Select-Object -ExpandProperty TargetNodeAddress)`)
-	out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel))
+	out, stderr, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel))
 	if err != nil {
-		return "", fmt.Errorf("volume get mounts fail cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
+		return "", fmt.Errorf("volume get mounts fail cmd:%s, output:%s, err: %w", cmdLine, string(stderr), err)
 	}
 
 	var iqns []string

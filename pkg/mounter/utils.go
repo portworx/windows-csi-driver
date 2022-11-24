@@ -1,8 +1,11 @@
 //go:build windows
 // +build windows
+
+//
 package mounter
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 
@@ -11,10 +14,17 @@ import (
 
 const MaxPathLengthWindows = 260
 
-func RunPowershellCmd(command string, envs ...string) ([]byte, error) {
+// returns: stdout, stderr, err
+func RunPowershellCmd(command string, envs ...string) ([]byte, []byte, error) {
 	cmd := exec.Command("powershell", "-Mta", "-NoProfile", "-Command", command)
 	cmd.Env = append(os.Environ(), envs...)
 	klog.V(8).Infof("Executing command: %q", cmd.String())
-	out, err := cmd.CombinedOutput()
-	return out, err
+
+	var sout, serr bytes.Buffer
+
+	cmd.Stdout = &sout
+	cmd.Stderr = &serr
+
+	err := cmd.Run()
+	return sout.Bytes(), serr.Bytes(), err
 }
