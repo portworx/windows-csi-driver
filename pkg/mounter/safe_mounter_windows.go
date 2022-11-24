@@ -252,7 +252,7 @@ func (mounter *csiProxyMounter) IscsiVolumeExists(fsLabel string) (bool, error) 
 
 	if len(volumes) == 0 {
 		klog.Warningf("IscsiVolumeExists did not find any volume for label %v", fsLabel)
-		return false, ErrNoSuchVolume
+		return false, nil
 	}
 
 	if len(volumes) != 1 {
@@ -314,7 +314,7 @@ func (mounter *csiProxyMounter) IscsiFormatVolume(serialnum, fslabel string) err
 	// Runs:  Initialize-Disk and creates a new data partition for use
 
 	exists, err := mounter.IscsiVolumeExists(fslabel)
-	if err != nil && err != ErrNoSuchVolume {
+	if err != nil {
 		return err
 	}
 	if exists {
@@ -356,7 +356,7 @@ func (mounter *csiProxyMounter) IscsiFormatVolume(serialnum, fslabel string) err
 
 func (mounter *csiProxyMounter) IscsiVolumeReadOnly(fslabel string) (bool, error) {
 	exists, err := mounter.IscsiVolumeExists(fslabel)
-	if err != nil && err != ErrNoSuchVolume {
+	if err != nil {
 		return false, err
 	}
 	if !exists {
@@ -374,7 +374,7 @@ func (mounter *csiProxyMounter) IscsiVolumeReadOnly(fslabel string) (bool, error
 
 func (mounter *csiProxyMounter) IscsiVolumeSetReadOnly(fslabel string, readonly bool) error {
 	exists, err := mounter.IscsiVolumeExists(fslabel)
-	if err != nil && err != ErrNoSuchVolume {
+	if err != nil {
 		return err
 	}
 	if !exists {
