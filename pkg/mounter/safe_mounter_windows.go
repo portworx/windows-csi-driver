@@ -328,7 +328,7 @@ func (mounter *csiProxyMounter) IscsiFormatVolume(serialnum, fslabel string) err
 		klog.V(2).Infof("finding disk with serialnum %v\n", serialnum)
 		ok, err := mounter.IscsiDiskInitialized(serialnum)
 		if err == ErrNoSuchDisk {
-			return true, nil
+			return false, nil
 		}
 		if err != nil {
 			return false, err
@@ -341,7 +341,7 @@ func (mounter *csiProxyMounter) IscsiFormatVolume(serialnum, fslabel string) err
 			}
 		}
 
-		return false, nil
+		return true, nil
 	}
 
 	err := wait.ExponentialBackoff(
