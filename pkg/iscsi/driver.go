@@ -76,12 +76,16 @@ func NewDriver(name, version string, options *common.DriverOptions) *iscsiDriver
 	d.AddNodeServiceCapabilities(nodeCap)
 
 	var err error
-	d.mounter, err = mounter.NewSafeMounter(false)
+	d.mounter, err = mounter.NewSafeMounter(common.DriverModeIscsi, false)
 	if err != nil {
 		klog.Fatalf("Failed to get safe mounter. Error: %v", err)
 	}
 
 	return &d
+}
+
+func (d *iscsiDriver) GetMode() common.DriverMode {
+	return common.DriverModeIscsi
 }
 
 func (d *iscsiDriver) Init() {

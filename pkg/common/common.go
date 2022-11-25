@@ -11,15 +11,29 @@ type DriverMode uint
 
 const (
 	DriverModeInvalid = DriverMode(0)
-	DriverModeSmb = DriverMode(1)
-	DriverModeIscsi = DriverMode(2)
+	DriverModeSmb     = DriverMode(1)
+	DriverModeIscsi   = DriverMode(2)
 )
 
+func (m DriverMode) String() string {
+	switch m {
+	case DriverModeSmb:
+		return "smb"
+	case DriverModeIscsi:
+		return "iscsi"
+	default:
+		return "invalid"
+	}
+}
+
 func ParseDriverMode(mode string) (DriverMode, error) {
-	switch (mode) {
-	case "iscsi": return DriverModeIscsi, nil
-	case "smb": return DriverModeSmb, nil
-	default: return DriverModeInvalid, fmt.Errorf("invalid mode %s", mode)
+	switch mode {
+	case "iscsi":
+		return DriverModeIscsi, nil
+	case "smb":
+		return DriverModeSmb, nil
+	default:
+		return DriverModeInvalid, fmt.Errorf("invalid mode %s", mode)
 	}
 }
 
@@ -28,7 +42,6 @@ type SmbDriverOptions struct {
 	RemoveSMBMappingDuringUnmount bool
 	WorkingMountDir               string
 }
-
 
 type IscsiDriverOptions struct {
 	Endpoint string
@@ -41,7 +54,7 @@ type DriverOptions struct {
 	Mode                 DriverMode
 	EnableGetVolumeStats bool
 
-	SmbOpts SmbDriverOptions
+	SmbOpts   SmbDriverOptions
 	IscsiOpts IscsiDriverOptions
 }
 
@@ -54,6 +67,7 @@ type BaseDriver interface {
 	GetVolumeCapabilityAccessModes() []*csi.VolumeCapability_AccessMode
 
 	Init()
+	GetMode() DriverMode
 
 	GetControllerServer() csi.ControllerServer
 	GetIdentityServer() csi.IdentityServer

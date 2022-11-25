@@ -20,10 +20,11 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/sulakshm/csi-driver/pkg/common"
 )
 
 func TestNewSafeMounter(t *testing.T) {
-	resp, err := NewSafeMounter(true)
+	resp, err := NewSafeMounter(common.DriverModeSmb, true)
 	assert.NotNil(t, resp)
 	assert.Nil(t, err)
 }

@@ -22,9 +22,10 @@ package mounter
 import (
 	mount "k8s.io/mount-utils"
 	utilexec "k8s.io/utils/exec"
+	"github.com/sulakshm/csi-driver/pkg/common"
 )
 
-func NewSafeMounter(removeSMBMappingDuringUnmount bool) (*mount.SafeFormatAndMount, error) {
+func NewSafeMounter(mode common.DriverMode, removeSMBMappingDuringUnmount bool) (*mount.SafeFormatAndMount, error) {
 	return &mount.SafeFormatAndMount{
 		Interface: mount.New(""),
 		Exec:      utilexec.New(),

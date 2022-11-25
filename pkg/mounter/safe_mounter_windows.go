@@ -32,18 +32,15 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/wait"
 
+	iscsi "github.com/kubernetes-csi/csi-proxy/client/api/iscsi/v1alpha2"
+
 	fs "github.com/kubernetes-csi/csi-proxy/client/api/filesystem/v1"
 	fsclient "github.com/kubernetes-csi/csi-proxy/client/groups/filesystem/v1"
-
-	iscsi "github.com/kubernetes-csi/csi-proxy/client/api/iscsi/v1alpha2"
-	iscsiclient "github.com/kubernetes-csi/csi-proxy/client/groups/iscsi/v1alpha2"
-
-	// vol "github.com/kubernetes-csi/csi-proxy/client/api/volume/v1"
-	volclient "github.com/kubernetes-csi/csi-proxy/client/groups/volume/v1"
 
 	smb "github.com/kubernetes-csi/csi-proxy/client/api/smb/v1"
 	smbclient "github.com/kubernetes-csi/csi-proxy/client/groups/smb/v1"
 
+	"github.com/sulakshm/csi-driver/pkg/common"
 	"k8s.io/klog/v2"
 	mount "k8s.io/mount-utils"
 	utilexec "k8s.io/utils/exec"
@@ -68,9 +65,8 @@ type CSIProxyMounter interface {
 var _ CSIProxyMounter = &csiProxyMounter{}
 
 type csiProxyMounter struct {
+	Mode                          common.DriverMode
 	FsClient                      *fsclient.Client
-	ISCSIClient                   *iscsiclient.Client
-	VolClient                     *volclient.Client
 	SMBClient                     *smbclient.Client
 	RemoveSMBMappingDuringUnmount bool
 }
@@ -447,7 +443,8 @@ func (mounter *csiProxyMounter) IscsiVolumeSetReadOnly(fslabel string, readonly 
 
 func (mounter *csiProxyMounter) IscsiSetMutualChapSecret(req *iscsi.SetMutualChapSecretRequest) (*iscsi.SetMutualChapSecretResponse, error) {
 	klog.V(2).Infof("IscsiSetMutualChapSecret: chap secret %v", req.MutualChapSecret)
-	return mounter.ISCSIClient.SetMutualChapSecret(context.Background(), req)
+	// return mounter.ISCSIClient.SetMutualChapSecret(context.Background(), req)
+	return nil, fmt.Errorf("not implemented")
 }
 
 func (mounter *csiProxyMounter) IscsiVolumeMount(fslabel string, path string) error {
@@ -850,47 +847,54 @@ func (mounter *csiProxyMounter) MountSensitiveWithoutSystemdWithMountFlags(sourc
 	return mounter.MountSensitive(source, target, fstype, options, sensitiveOptions /* sensitiveOptions */)
 }
 
-// NewCSIProxyMounter - creates a new CSI Proxy mounter struct which encompassed all the
+// NewSmbCSIProxyMounter - creates a new CSI Proxy mounter struct which encompassed all the
 // clients to the CSI proxy - filesystem, disk and volume clients.
-func NewCSIProxyMounter(removeSMBMappingDuringUnmount bool) (*csiProxyMounter, error) {
-	/*
-		fsClient, err := fsclient.NewClient()
-		if err != nil {
-			return nil, err
-		}
-		iscsiClient, err := iscsiclient.NewClient()
-		if err != nil {
-			return nil, err
-		}
-		volClient, err := volclient.NewClient()
-		if err != nil {
-			return nil, err
-		}
-		smbClient, err := smbclient.NewClient()
-		if err != nil {
-			return nil, err
-		}
+func NewSmbCSIProxyMounter(removeSMBMappingDuringUnmount bool) (*csiProxyMounter, error) {
+	fsClient, err := fsclient.NewClient()
+	if err != nil {
+		return nil, err
+	}
+	smbClient, err := smbclient.NewClient()
+	if err != nil {
+		return nil, err
+	}
 
-		return &csiProxyMounter{
-			FsClient:                      fsClient,
-			ISCSIClient:                   iscsiClient,
-			VolClient:                     volClient,
-			SMBClient:                     smbClient,
-			RemoveSMBMappingDuringUnmount: removeSMBMappingDuringUnmount,
-		}, nil
-	*/
 	return &csiProxyMounter{
+		Mode:                          common.DriverModeSmb,
+		FsClient:                      fsClient,
+		SMBClient:                     smbClient,
 		RemoveSMBMappingDuringUnmount: removeSMBMappingDuringUnmount,
 	}, nil
 }
 
-func NewSafeMounter(removeSMBMappingDuringUnmount bool) (*mount.SafeFormatAndMount, error) {
-	csiProxyMounter, err := NewCSIProxyMounter(removeSMBMappingDuringUnmount)
-	if err != nil {
-		klog.V(2).Infof("failed to connect to csi-proxy with error: %v", err)
-		return nil, err
+// NewIscsiCSIProxyMounter - creates a new CSI Proxy mounter struct which provides the wrapper over
+// needed iscsi operations.
+func NewIscsiCSIProxyMounter() (*csiProxyMounter, error) {
+	return &csiProxyMounter{Mode: common.DriverModeIscsi}, nil
+}
+
+func NewSafeMounter(mode common.DriverMode, removeSMBMappingDuringUnmount bool) (*mount.SafeFormatAndMount, error) {
+	var csiProxyMounter *csiProxyMounter
+	var err error
+
+	if mode == common.DriverModeSmb {
+		csiProxyMounter, err = NewSmbCSIProxyMounter(removeSMBMappingDuringUnmount)
+		if err != nil {
+			klog.V(2).Infof("failed to connect to csi-proxy with error: %v", err)
+			return nil, err
+		}
+		klog.V(2).Infof("using SMB CSIProxyMounterV1, %s", csiProxyMounter.GetAPIVersions())
+	} else if mode == common.DriverModeIscsi {
+		csiProxyMounter, err = NewIscsiCSIProxyMounter()
+		if err != nil {
+			klog.V(2).Infof("failed to initialize iscsi mounter: %v", err)
+			return nil, err
+		}
+		klog.V(2).Infof("using ISCSI CSIProxyMounter, %s", csiProxyMounter.GetAPIVersions())
+	} else {
+		return nil, fmt.Errorf("unsupported driver mode %v", mode.String())
 	}
-	klog.V(2).Infof("using CSIProxyMounterV1, %s", csiProxyMounter.GetAPIVersions())
+
 	return &mount.SafeFormatAndMount{
 		Interface: csiProxyMounter,
 		Exec:      utilexec.New(),

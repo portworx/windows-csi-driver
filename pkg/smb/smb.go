@@ -78,7 +78,7 @@ func NewDriver(name, version string, options *common.DriverOptions) *smbDriver {
 	driver.volumeLocks = utils.NewVolumeLocks()
 
 	var err error
-	driver.mounter, err = mounter.NewSafeMounter(driver.removeSMBMappingDuringUnmount)
+	driver.mounter, err = mounter.NewSafeMounter(common.DriverModeSmb, driver.removeSMBMappingDuringUnmount)
 	if err != nil {
 		klog.Fatalf("Failed to get safe mounter. Error: %v", err)
 	}
@@ -122,6 +122,10 @@ func (d *smbDriver) GetIdentityServer() csi.IdentityServer {
 
 func (d *smbDriver) GetNodeServer() csi.NodeServer {
 	return d
+}
+
+func (d *smbDriver) GetMode() common.DriverMode {
+	return common.DriverModeSmb
 }
 
 // Init driver initialization
