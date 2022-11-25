@@ -44,3 +44,58 @@ docker buildx build --pull --output=type=registry --platform="windows/amd64" \
  => [auth] sulakshm/pxplugin:pull,push token for registry-1.docker.io                                          0.0s
 lns@ip-10-13-111-243:~/srcs/src/github.com/sulakshm/csi-driver$
 
+lns@ip-10-13-111-243:~/srcs/src/github.com/sulakshm/csi-driver$ OSVERSION=20H2 BUILD_PLATFORMS="windows amd64 .exe" REGISTRY=sulakshm make container-windows
+docker buildx build --pull --output=type=registry --platform="windows/amd64" \
+         -t sulakshm/pxplugin:v0.1.1-windows-20H2-amd64 --build-arg OSVERSION=20H2 \
+         --build-arg ARCH=amd64 -f ./cmd/pxplugin/Dockerfile.Windows .
+[+] Building 5.5s (11/11) FINISHED
+ => [internal] load .dockerignore                                                                              0.0s
+ => => transferring context: 2B                                                                                0.0s
+ => [internal] load build definition from Dockerfile.Windows                                                   0.0s
+ => => transferring dockerfile: 1.17kB                                                                         0.0s
+ => [internal] load metadata for mcr.microsoft.com/windows/nanoserver:1809                                     0.3s
+ => [internal] load metadata for mcr.microsoft.com/windows/servercore:1809                                     0.3s
+ => CACHED [stage-1 1/3] FROM mcr.microsoft.com/windows/nanoserver:1809@sha256:5c9da3bfe1524eab610dfd41c79a08  0.0s
+ => => resolve mcr.microsoft.com/windows/nanoserver:1809@sha256:5c9da3bfe1524eab610dfd41c79a0805c080f8307d810  0.0s
+ => [internal] load build context                                                                              0.4s
+ => => transferring context: 30.26MB                                                                           0.4s
+ => CACHED [addon 1/1] FROM mcr.microsoft.com/windows/servercore:1809@sha256:cbb8b0a709b4e0868cd2e30b14853581  0.0s
+ => => resolve mcr.microsoft.com/windows/servercore:1809@sha256:cbb8b0a709b4e0868cd2e30b1485358197b1021bb0dd4  0.0s
+ => [stage-1 2/3] COPY ./_output/amd64/pxplugin.exe /pxplugin.exe                                              0.2s
+ => [stage-1 3/3] COPY --from=addon /Windows/System32/netapi32.dll /Windows/System32/netapi32.dll              0.1s
+ => exporting to image                                                                                         4.4s
+ => => exporting layers                                                                                        2.1s
+ => => exporting manifest sha256:2809236b2cc8127d48a5088b8e79d00927e079c98fe325bc25ebb8f07aba50fe              0.0s
+ => => exporting config sha256:118a64cc0ea7c8a1d52ae3faf5a03d6c5e53f905cec1ae460e96fac4d39043bf                0.0s
+ => => pushing layers                                                                                          1.9s
+ => => pushing manifest for docker.io/sulakshm/pxplugin:v0.1.1-windows-20H2-amd64@sha256:2809236b2cc8127d48a5  0.3s
+ => [auth] sulakshm/pxplugin:pull,push token for registry-1.docker.io                                          0.0s
+lns@ip-10-13-111-243:~/srcs/src/github.com/sulakshm/csi-driver$
+
+lns@ip-10-13-111-243:~/srcs/src/github.com/sulakshm/csi-driver$ OSVERSION=ltsc2022 BUILD_PLATFORMS="windows amd64 .exe" REGISTRY=sulakshm make container-windows
+docker buildx build --pull --output=type=registry --platform="windows/amd64" \
+         -t sulakshm/pxplugin:v0.1.1-windows-ltsc2022-amd64 --build-arg OSVERSION=ltsc2022 \
+         --build-arg ARCH=amd64 -f ./cmd/pxplugin/Dockerfile.Windows .
+[+] Building 8.7s (10/10) FINISHED
+ => [internal] load .dockerignore                                                                              0.0s
+ => => transferring context: 2B                                                                                0.0s
+ => [internal] load build definition from Dockerfile.Windows                                                   0.0s
+ => => transferring dockerfile: 1.17kB                                                                         0.0s
+ => [internal] load metadata for mcr.microsoft.com/windows/nanoserver:1809                                     0.2s
+ => [internal] load metadata for mcr.microsoft.com/windows/servercore:1809                                     0.3s
+ => [addon 1/1] FROM mcr.microsoft.com/windows/servercore:1809@sha256:cbb8b0a709b4e0868cd2e30b1485358197b1021  0.0s
+ => => resolve mcr.microsoft.com/windows/servercore:1809@sha256:cbb8b0a709b4e0868cd2e30b1485358197b1021bb0dd4  0.0s
+ => [internal] load build context                                                                              0.0s
+ => => transferring context: 110B                                                                              0.0s
+ => [stage-1 1/3] FROM mcr.microsoft.com/windows/nanoserver:1809@sha256:5c9da3bfe1524eab610dfd41c79a0805c080f  0.0s
+ => => resolve mcr.microsoft.com/windows/nanoserver:1809@sha256:5c9da3bfe1524eab610dfd41c79a0805c080f8307d810  0.0s
+ => CACHED [stage-1 2/3] COPY ./_output/amd64/pxplugin.exe /pxplugin.exe                                       0.0s
+ => CACHED [stage-1 3/3] COPY --from=addon /Windows/System32/netapi32.dll /Windows/System32/netapi32.dll       0.0s
+ => exporting to image                                                                                         8.3s
+ => => exporting layers                                                                                        0.0s
+ => => exporting manifest sha256:2809236b2cc8127d48a5088b8e79d00927e079c98fe325bc25ebb8f07aba50fe              0.0s
+ => => exporting config sha256:118a64cc0ea7c8a1d52ae3faf5a03d6c5e53f905cec1ae460e96fac4d39043bf                0.0s
+ => => pushing layers                                                                                          7.8s
+ => => pushing manifest for docker.io/sulakshm/pxplugin:v0.1.1-windows-ltsc2022-amd64@sha256:2809236b2cc8127d  0.4s
+lns@ip-10-13-111-243:~/srcs/src/github.com/sulakshm/csi-driver$
+
