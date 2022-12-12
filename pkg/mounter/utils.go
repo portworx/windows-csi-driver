@@ -16,6 +16,7 @@ const MaxPathLengthWindows = 260
 
 // returns: stdout, stderr, err
 func RunPowershellCmd(command string, envs ...string) ([]byte, []byte, error) {
+	// not able to find powershell from within container. some have pwsh.exe. Path issue?
 	cmd := exec.Command("powershell", "-Mta", "-NoProfile", "-Command", command)
 	cmd.Env = append(os.Environ(), envs...)
 	klog.V(8).Infof("Executing command: %q", cmd.String())

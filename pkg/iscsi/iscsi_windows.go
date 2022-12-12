@@ -5,6 +5,7 @@ package iscsi
 
 import (
 	"fmt"
+	"strings"
 	"strconv"
 
 	"github.com/sulakshm/csi-driver/pkg/mounter"
@@ -13,7 +14,7 @@ import (
 	"golang.org/x/net/context"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/klog/v2"
+	klog "k8s.io/klog/v2"
 	mount "k8s.io/mount-utils"
 )
 
@@ -36,9 +37,13 @@ type iscsiDisk struct {
 
 func parsePortal(portal string) (string, uint32) {
 	var addr string
-	var port uint32
-	fmt.Sscanf(portal, "%s:%d", &addr, &port)
-	return addr, port
+	var port int
+
+	fields := strings.Split(portal, ":")
+	addr = fields[0]
+	port, _ = strconv.Atoi(fields[1])
+
+	return addr, uint32(port)
 }
 
 func getNeededAttributes(volumeID string, context map[string]string) *iscsiDisk {
@@ -59,6 +64,7 @@ func getNeededAttributes(volumeID string, context map[string]string) *iscsiDisk 
 
 	var attrs attribs
 	for k, v := range context {
+		klog.V(2).Infof("[%s]: Parsing %s: %v", volumeID, k, v)
 		switch k {
 		case "volumeID":
 			attrs.volumeID = v
@@ -87,7 +93,7 @@ func getNeededAttributes(volumeID string, context map[string]string) *iscsiDisk 
 			attrs.readonly = v
 		default:
 			// unknown k/v found in context from controller.
-			klog.Fatalf("volume(%v) context found unknown attribute(%v:%v)", volumeID, k, v)
+			klog.Warningf("volume(%v) context found unknown attribute(%v:%v)", volumeID, k, v)
 		}
 	}
 
@@ -107,6 +113,7 @@ func getNeededAttributes(volumeID string, context map[string]string) *iscsiDisk 
 
 	// authentication other than none - not supported
 
+	klog.V(2).Infof("volume %v: disk info{%+v}", volumeID, disk)
 	return &disk
 }
 
@@ -120,7 +127,7 @@ func volLow(id uint64) uint64 {
 
 func getVolumeWWN(volumeID string) (string, error) {
 	// volumeID - pwx unique volume id ex. 425350735095133013
-	const volIDFmt = "504f5258-0000-0002-%04x-%012x"
+	const volIDFmt = "504f5258-0000-0102-%04x-%012x"
 
 	id, err := strconv.ParseUint(volumeID, 10, 64)
 	if err != nil {
@@ -131,11 +138,16 @@ func getVolumeWWN(volumeID string) (string, error) {
 }
 
 func csiMounter(m mount.Interface) mounter.CSIProxyMounter {
-	p, ok := m.(mounter.CSIProxyMounter)
+	p, ok := m.(*mount.SafeFormatAndMount)
+	if !ok {
+		klog.Fatalf("cannot dereference to needed mount.SafeFormatAndMount")
+	}
+
+	p1, ok := p.Interface.(mounter.CSIProxyMounter)
 	if !ok {
 		klog.Fatalf("cannot dereference to needed CSIProxyMounter")
 	}
-	return p
+	return p1
 }
 
 func (ns *iscsiDriver) addDisk(disk *iscsiDisk) error {
@@ -143,6 +155,7 @@ func (ns *iscsiDriver) addDisk(disk *iscsiDisk) error {
 
 	for _, p := range disk.portals {
 		addr, port := parsePortal(p)
+		klog.V(2).Infof("%s: addDisk: portal %s, parsed addr %v, port %v", disk.volumeID, p, addr, port)
 		if err := csiMounter(ns.mounter).IscsiAddTargetPortal(addr, port); err != nil {
 			return err
 		}
@@ -189,7 +202,7 @@ func (ns *iscsiDriver) iscsiNodeStageVolume(ctx context.Context, req *csi.NodeSt
 	}
 
 	// context is setup by pwx csi controller driver
-	context := req.GetVolumeContext()
+	context := req.GetPublishContext()
 
 	disk := getNeededAttributes(volumeID, context)
 
@@ -232,6 +245,7 @@ func (ns *iscsiDriver) iscsiNodeUnstageVolume(ctx context.Context, req *csi.Node
 
 	m := csiMounter(ns.mounter)
 
+/*
 	paths, err := m.IscsiGetVolumeMounts(req.GetVolumeId(), false)
 	if err != nil {
 		return nil, err
@@ -249,21 +263,31 @@ func (ns *iscsiDriver) iscsiNodeUnstageVolume(ctx context.Context, req *csi.Node
 	if !found {
 		return &csi.NodeUnstageVolumeResponse{}, nil
 	}
+*/
 
-	err = m.IscsiVolumeUnmount(req.GetVolumeId(), req.GetStagingTargetPath())
+	// dont fail this call, do as much cleanup as possible, report failures as logs
+	coe := true
+
+	err := m.IscsiVolumeUnmount(req.GetVolumeId(), req.GetStagingTargetPath())
 	if err != nil {
-		return nil, err
+		if !coe {
+			return nil, err
+		}
+		klog.Warning("Volume(%v) unmount failed %s", req.GetVolumeId(), err)
 	}
 
 	iqn, err := m.IscsiGetTargetNodeAddress(req.GetVolumeId())
 	if err != nil {
-		return nil, err
-	}
-
-	klog.V(2).Infof("Volume(%v) found matching iqn %s", req.GetVolumeId(), iqn)
-	err = m.IscsiDisconnectTarget(iqn)
-	if err != nil {
-		return nil, err
+		if !coe {
+			return nil, err
+		}
+		klog.Warningf("Volume(%v) target node addr failed %s", req.GetVolumeId(), err)
+	} else {
+		klog.V(2).Infof("Volume(%v) found matching iqn %s", req.GetVolumeId(), iqn)
+		err = m.IscsiDisconnectTarget(iqn)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	klog.V(2).Infof("Volume(%v) NodeUnstageVolume from path %v, iqn %s finished err = %v",
@@ -301,14 +325,19 @@ func (ns *iscsiDriver) iscsiNodeUnpublishVolume(ctx context.Context, req *csi.No
 
 	m := csiMounter(ns.mounter)
 
+	targetPath := req.GetTargetPath()
+/*
+	--- Do not fail call if volume does not exist!
 	paths, err := m.IscsiGetVolumeMounts(req.GetVolumeId(), false)
 	if err != nil {
 		return nil, err
 	}
 
-	targetPath := req.GetTargetPath()
 	for _, p := range paths {
 		if p == targetPath {
+*/
+	{
+		{
 			err := m.IscsiVolumeUnmount(req.GetVolumeId(), targetPath)
 			klog.V(2).Infof("Volume(%v) NodeUnpublishVolume from path %v finished err = %v",
 				req.GetVolumeId(), targetPath, err)
