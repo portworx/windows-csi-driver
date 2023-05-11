@@ -871,6 +871,7 @@ func (mounter *csiProxyMounter) AddDrive(
 		klog.V(2).Infof("AddDrive: volid %s, cmd %v, failed %v", volid, cmdLine, err)
 		return fmt.Errorf("error nfs mounting. cmd %s, output %s. err %v", cmdLine, string(out), err)
 	}
+
 	return nil
 }
 
@@ -934,6 +935,7 @@ func (mounter *csiProxyMounter) DriveExists(
 func (mounter *csiProxyMounter) MkVolume(volid string) error {
 	// runs:
 	// New-item -Path c:\myvol\vol1 -ItemType SymbolicLink -Value 615688357680565115:
+	// use cli: cmd.exe /c "mklink /D c:\pwxvol\615688357680565485  \\10.13.197.205\var\lib\osd\pxns\615688357680565485"
 	klog.V(2).Infof("MkVolume: volid %s", volid)
 
 	volPath := volumePath(volid)
@@ -952,12 +954,13 @@ func (mounter *csiProxyMounter) MkVolume(volid string) error {
 
 func (mounter *csiProxyMounter) MkLink(volid, target string) error {
 	// runs:
-	// New-item -Path c:\myvol\vol1 -ItemType SymbolicLink -Value 615688357680565115:
+	// New-item -Path c:\myvol\vol1 -ItemType SymbolicLink -Value c:\pwxvol\615688357680565115
 	klog.V(2).Infof("MkLink: volid %s, target %s", volid, target)
 
+	// internal work dir path for mounted volume
 	src := volumePath(volid)
 
-	cmdLine := fmt.Sprintf("New-Item -Path ${Env:volpath} -ItemType SymbolicLink -Value ${Env:target}")
+	cmdLine := fmt.Sprintf("New-Item -Path ${Env:target} -ItemType SymbolicLink -Value ${Env:volpath}")
 	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volpath=%s", src), fmt.Sprintf("target=%s", target))
 	if err != nil {
 		klog.V(2).Infof("MkLink: volid %s, target %s, failed %v", volid, target, err)

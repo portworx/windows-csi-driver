@@ -29,3 +29,18 @@ func RunPowershellCmd(command string, envs ...string) ([]byte, []byte, error) {
 	err := cmd.Run()
 	return sout.Bytes(), serr.Bytes(), err
 }
+
+// returns: stdout, stderr, err
+func RunCmd(command string, envs ...string) ([]byte, []byte, error) {
+	cmd := exec.Command("cmd.exe", "/c", command)
+	cmd.Env = append(os.Environ(), envs...)
+	klog.V(8).Infof("Executing command: %q", cmd.String())
+
+	var sout, serr bytes.Buffer
+
+	cmd.Stdout = &sout
+	cmd.Stderr = &serr
+
+	err := cmd.Run()
+	return sout.Bytes(), serr.Bytes(), err
+}
