@@ -13,12 +13,15 @@ const (
 	DriverModeInvalid = DriverMode(0)
 	DriverModeSmb     = DriverMode(1)
 	DriverModeIscsi   = DriverMode(2)
+	DriverModeNfs     = DriverMode(3)
 )
 
 func (m DriverMode) String() string {
 	switch m {
 	case DriverModeSmb:
 		return "smb"
+	case DriverModeNfs:
+		return "nfs"
 	case DriverModeIscsi:
 		return "iscsi"
 	default:
@@ -32,6 +35,8 @@ func ParseDriverMode(mode string) (DriverMode, error) {
 		return DriverModeIscsi, nil
 	case "smb":
 		return DriverModeSmb, nil
+	case "nfs":
+		return DriverModeNfs, nil
 	default:
 		return DriverModeInvalid, fmt.Errorf("invalid mode %s", mode)
 	}
@@ -44,7 +49,10 @@ type SmbDriverOptions struct {
 }
 
 type IscsiDriverOptions struct {
-	Endpoint string
+	Endpoint string // should be common
+}
+
+type NfsDriverOptions struct {
 }
 
 // DriverOptions defines driver parameters specified in driver deployment
@@ -53,9 +61,11 @@ type DriverOptions struct {
 	DriverName           string
 	Mode                 DriverMode
 	EnableGetVolumeStats bool
+	Endpoint string
 
 	SmbOpts   SmbDriverOptions
 	IscsiOpts IscsiDriverOptions
+	NfsOpts   NfsDriverOptions
 }
 
 type BaseDriver interface {

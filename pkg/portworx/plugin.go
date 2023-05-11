@@ -6,6 +6,7 @@ import (
 	"github.com/sulakshm/csi-driver/pkg/common"
 	smb "github.com/sulakshm/csi-driver/pkg/smb"
 	iscsi "github.com/sulakshm/csi-driver/pkg/iscsi"
+	nfs "github.com/sulakshm/csi-driver/pkg/nfs"
 )
 
 const (
@@ -25,11 +26,17 @@ const (
 	pvNameMetadata       = "${pv.metadata.name}"
 	driverModeSmb       = "smb"
         driverModeIscsi     = "iscsi"
+	driverModeNfs       = "nfs"
 )
 
 // NewDriver Creates a NewCSIDriver object. Assumes vendor version is equal to driver version &
 // does not support optional driver plugin info manifest field. Refer to CSI spec for more details.
 func NewDriver(name, version string, options *common.DriverOptions) common.BaseDriver {
+	if options.Mode == common.DriverModeNfs {
+		klog.V(2).Info("\nDRIVER initialized with Nfs\n")
+		return nfs.NewDriver(name, version, options)
+	}
+
 	if options.Mode == common.DriverModeSmb {
 		klog.V(2).Info("\nDRIVER initialized with Smb\n")
 		return smb.NewDriver(name, version, options)
