@@ -937,7 +937,7 @@ func (mounter *csiProxyMounter) MkVolume(volid string) error {
 	klog.V(2).Infof("MkVolume: volid %s", volid)
 
 	volPath := volumePath(volid)
-	psdrive := volPath + ":"
+	psdrive := volid + ":"
 
 	cmdLine := fmt.Sprintf("New-Item -Path ${Env:volpath} -ItemType SymbolicLink -Value ${Env:psdrive}")
 	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volpath=%s", volumePath(volid)),
