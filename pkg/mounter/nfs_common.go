@@ -13,10 +13,10 @@ func volumePath(volid string) string {
 
 type DriveInfoObj struct {
 	CurrentLocation string // not sure what is this
-	Name string // drive name: should match volume id
-	Root string // UNC path //<ip>/share/path
-	Used uint64 // Need to check if used works
-	Description string // should match 'pwxtag'
+	Name            string // drive name: should match volume id
+	Root            string // UNC path //<ip>/share/path
+	Used            uint64 // Need to check if used works
+	Description     string // should match 'pwxtag'
 }
 
 type NfsMounter interface {
@@ -33,7 +33,7 @@ type NfsMounter interface {
 	RmVolume(volid string) error
 }
 
-type stubNfsMounter struct {}
+type stubNfsMounter struct{}
 
 func (nfs *stubNfsMounter) AddDrive(
 	volid string,
@@ -73,7 +73,6 @@ func (nfs *stubNfsMounter) RmLink(volid, target string) error {
 	return errStubImpl
 }
 
-
 func (nfs *stubNfsMounter) RmVolume(volid string) error {
 	return errStubImpl
 }
@@ -84,7 +83,6 @@ func (nfs *stubNfsMounter) NfsMount(
 ) error {
 	return errStubImpl
 }
-
 
 func (nfs *stubNfsMounter) NfsUnmount(target string) error {
 	return errStubImpl

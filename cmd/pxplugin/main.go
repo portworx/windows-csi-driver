@@ -22,15 +22,15 @@ func init() {
 }
 
 var (
-	endpoint                      = flag.String("endpoint", "unix://tmp/csi.sock", "CSI endpoint")
-	nodeID                        = flag.String("nodeid", "", "node id")
-	driverName                    = flag.String("drivername", pwx.DefaultDriverName, "name of the driver")
-	ver                           = flag.Bool("ver", false, "Print the version and exit.")
-	mode                          = flag.String("mode", "nfs", "operational mode, one of nfs/iscsi/smb. default nfs")
+	endpoint   = flag.String("endpoint", "unix://tmp/csi.sock", "CSI endpoint")
+	nodeID     = flag.String("nodeid", "", "node id")
+	driverName = flag.String("drivername", pwx.DefaultDriverName, "name of the driver")
+	ver        = flag.Bool("ver", false, "Print the version and exit.")
+	mode       = flag.String("mode", "nfs", "operational mode, one of nfs/iscsi/smb. default nfs")
 	/// confirm if below is used
-	workingMountDir               = flag.String("working-mount-dir", "/tmp", "working directory for provisioner to mount smb shares temporarily")
+	workingMountDir = flag.String("working-mount-dir", "/tmp", "working directory for provisioner to mount smb shares temporarily")
 	// for volume stats
-	metricsAddress                = flag.String("metrics-address", "0.0.0.0:29644", "export the metrics")
+	metricsAddress = flag.String("metrics-address", "0.0.0.0:29644", "export the metrics")
 )
 
 func main() {
@@ -67,9 +67,9 @@ func handle(modeVal common.DriverMode) {
 		modeVal, versionMeta)
 
 	driverOptions := common.DriverOptions{
-		NodeID:               *nodeID,
-		DriverName:           *driverName,
-		Mode:                 modeVal,
+		NodeID:     *nodeID,
+		DriverName: *driverName,
+		Mode:       modeVal,
 		// EnableGetVolumeStats: *enableGetVolumeStats,
 	}
 	// driverOptions.SmbOpts.RemoveSMBMappingDuringUnmount = *removeSMBMappingDuringUnmount

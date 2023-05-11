@@ -849,7 +849,7 @@ func (mounter *csiProxyMounter) MountSensitiveWithoutSystemdWithMountFlags(sourc
 	return mounter.MountSensitive(source, target, fstype, options, sensitiveOptions /* sensitiveOptions */)
 }
 
-/// nfs extensions
+// / nfs extensions
 func (mounter *csiProxyMounter) AddDrive(
 	volid string,
 	share_path string,
@@ -862,11 +862,11 @@ func (mounter *csiProxyMounter) AddDrive(
 		volid, share_path, sensitiveMountOptions)
 
 	cmdLine := fmt.Sprintf(`New-PSDrive -Name ${Env:volid} ` +
-				`-PSProvider FileSystem ` +
-				`-Root ${Env:path} -Scope Global -Description ${Env:pwxtag}`)
+		`-PSProvider FileSystem ` +
+		`-Root ${Env:path} -Scope Global -Description ${Env:pwxtag}`)
 	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volid=%s", volid),
-					fmt.Sprintf("path=%s", share_path),
-					fmt.Sprintf("pwxtag=%s", pwxtag))
+		fmt.Sprintf("path=%s", share_path),
+		fmt.Sprintf("pwxtag=%s", pwxtag))
 	if err != nil {
 		klog.V(2).Infof("AddDrive: volid %s, cmd %v, failed %v", volid, cmdLine, err)
 		return fmt.Errorf("error nfs mounting. cmd %s, output %s. err %v", cmdLine, string(out), err)
@@ -892,7 +892,7 @@ func (mounter *csiProxyMounter) DriveInfo(
 ) (*DriveInfoObj, bool, error) {
 	klog.V(2).Infof("DriveInfo: volid %s", volid)
 
-	// runs: 
+	// runs:
 	// ConvertTo-Json -InputObject @(Get-PSDrive -Name Public -ErrorAction Ignore)
 	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(Get-PSDrive -Name ${Env:volid} -ErrorAction Ignore)`)
 	out, stderr, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volid=%s", volid))
@@ -941,7 +941,7 @@ func (mounter *csiProxyMounter) MkVolume(volid string) error {
 
 	cmdLine := fmt.Sprintf("New-Item -Path ${Env:volpath} -ItemType SymbolicLink -Value ${Env:psdrive}")
 	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volpath=%s", volumePath(volid)),
-					fmt.Sprintf("psdrive=%s", psdrive))
+		fmt.Sprintf("psdrive=%s", psdrive))
 	if err != nil {
 		klog.V(2).Infof("MkVolume: volid %s, failed %v", volid, err)
 		return fmt.Errorf("error mkvolume. cmd %s, output %s, err %v", cmdLine, string(out), err)
@@ -981,7 +981,6 @@ func (mounter *csiProxyMounter) RmLink(volid, target string) error {
 	return nil
 }
 
-
 func (mounter *csiProxyMounter) RmVolume(volid string) error {
 	klog.V(2).Infof("RmVolume: volid %s", volid)
 
@@ -996,34 +995,33 @@ func (mounter *csiProxyMounter) NfsMount(
 	klog.V(2).Infof("NfsMount: remote path: %s local path: %s", source, target)
 
 	klog.V(2).Infof("NfsMount: other args fsType %s, options %v, %v",
-			fstype, mountOptions, sensitiveMountOptions)
+		fstype, mountOptions, sensitiveMountOptions)
 
-        parentDir := filepath.Dir(target)
-        parentExists, err := mounter.ExistsPath(parentDir)
-        if err != nil {
-                return fmt.Errorf("parent dir: %s exist check failed with err: %v", parentDir, err)
-        }
+	parentDir := filepath.Dir(target)
+	parentExists, err := mounter.ExistsPath(parentDir)
+	if err != nil {
+		return fmt.Errorf("parent dir: %s exist check failed with err: %v", parentDir, err)
+	}
 
-        if !parentExists {
-                klog.V(2).Infof("Parent directory %s does not exists. Creating the directory", parentDir)
-                if err := mounter.MakeDir(parentDir); err != nil {
-                        return fmt.Errorf("create of parent dir: %s dailed with error: %v", parentDir, err)
-                }
-        }
+	if !parentExists {
+		klog.V(2).Infof("Parent directory %s does not exists. Creating the directory", parentDir)
+		if err := mounter.MakeDir(parentDir); err != nil {
+			return fmt.Errorf("create of parent dir: %s dailed with error: %v", parentDir, err)
+		}
+	}
 
-        parts := strings.FieldsFunc(source, Split)
-        if len(parts) > 0 && strings.HasSuffix(parts[0], "svc.cluster.local") {
-                domainName := parts[0]
-                klog.V(2).Infof("begin to replace hostname(%s) with IP for source(%s)", domainName, source)
-                ip, err := net.ResolveIPAddr("ip4", domainName)
-                if err != nil {
-                        klog.Warningf("could not resolve name to IPv4 address for host %s, failed with error: %v", domainName, err)
-                } else {
-                        klog.V(2).Infof("resolve the name of host %s to IPv4 address: %s", domainName, ip.String())
-                        source = strings.Replace(source, domainName, ip.String(), 1)
-                }
-        }
-
+	parts := strings.FieldsFunc(source, Split)
+	if len(parts) > 0 && strings.HasSuffix(parts[0], "svc.cluster.local") {
+		domainName := parts[0]
+		klog.V(2).Infof("begin to replace hostname(%s) with IP for source(%s)", domainName, source)
+		ip, err := net.ResolveIPAddr("ip4", domainName)
+		if err != nil {
+			klog.Warningf("could not resolve name to IPv4 address for host %s, failed with error: %v", domainName, err)
+		} else {
+			klog.V(2).Infof("resolve the name of host %s to IPv4 address: %s", domainName, ip.String())
+			source = strings.Replace(source, domainName, ip.String(), 1)
+		}
+	}
 
 	// 'source' path has to be of form: //<ip>/var/lib/osd/mounts/<volid>
 	host := parts[0]
@@ -1050,9 +1048,9 @@ func (mounter *csiProxyMounter) NfsMount(
 
 	if err := mounter.MkVolume(volid); err != nil {
 		if created {
-		if err2 := mounter.RmDrive(volid); err2 != nil {
-			klog.V(2).Infof("cleanup add drive vol %s failed %v", volid, err2)
-		}
+			if err2 := mounter.RmDrive(volid); err2 != nil {
+				klog.V(2).Infof("cleanup add drive vol %s failed %v", volid, err2)
+			}
 		}
 		return err
 	}
@@ -1075,13 +1073,12 @@ func (mounter *csiProxyMounter) NfsMount(
 	return nil
 }
 
-
 func (mounter *csiProxyMounter) NfsUnmount(target string) error {
 	klog.V(4).Infof("NfsUnmount: local path: %s", target)
 
 	if remotePath, err := os.Readlink(target); err != nil {
-                klog.Warningf("NfsUnmount: can't get remote path: %v", err)
-        } else {
+		klog.Warningf("NfsUnmount: can't get remote path: %v", err)
+	} else {
 		remotePath = strings.TrimSuffix(remotePath, "\\")
 		parts := strings.FieldsFunc(remotePath, Split)
 		volid := parts[len(parts)-1]
@@ -1092,23 +1089,24 @@ func (mounter *csiProxyMounter) NfsUnmount(target string) error {
 		unlock := lock(volid)
 		defer unlock()
 
-                if err := decrementRemotePathReferencesCount(volid, host); err != nil {
-                                return fmt.Errorf("decrementMappingPathCount(%s, %s) failed with error: %v", volid, host, err)
-                }
-                count := getRemotePathReferencesCount(volid)
-                if count == 0 {
-                                klog.V(2).Infof("begin to Nfs volume %s on %s", remotePath, target)
-				mounter.RmLink(volid, target)
-				mounter.RmVolume(volid)
-				mounter.RmDrive(volid)
-				return nil
-                } else {
-                                klog.Infof("NfsUnmount: found %d links to %s", count, volid)
+		if err := decrementRemotePathReferencesCount(volid, host); err != nil {
+			return fmt.Errorf("decrementMappingPathCount(%s, %s) failed with error: %v", volid, host, err)
+		}
+		count := getRemotePathReferencesCount(volid)
+		if count == 0 {
+			klog.V(2).Infof("begin to Nfs volume %s on %s", remotePath, target)
+			mounter.RmLink(volid, target)
+			mounter.RmVolume(volid)
+			mounter.RmDrive(volid)
+			return nil
+		} else {
+			klog.Infof("NfsUnmount: found %d links to %s", count, volid)
 		}
 	}
 
 	return mounter.Rmdir(target)
 }
+
 /// nfs extensions
 
 // NewSmbCSIProxyMounter - creates a new CSI Proxy mounter struct which encompassed all the
@@ -1140,7 +1138,6 @@ func NewIscsiCSIProxyMounter() (*csiProxyMounter, error) {
 func NewNfsCSIProxyMounter() (*csiProxyMounter, error) {
 	return &csiProxyMounter{Mode: common.DriverModeNfs}, nil
 }
-
 
 func NewSafeMounter(mode common.DriverMode, removeSMBMappingDuringUnmount bool) (*mount.SafeFormatAndMount, error) {
 	var csiProxyMounter *csiProxyMounter

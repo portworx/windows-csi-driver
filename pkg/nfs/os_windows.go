@@ -38,28 +38,27 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"golang.org/x/net/context"
 	"github.com/sulakshm/csi-driver/pkg/mounter"
+	"golang.org/x/net/context"
 	mount "k8s.io/mount-utils"
 )
 
-/// TODO prune and decide the proper context fields to be exchanged
+// / TODO prune and decide the proper context fields to be exchanged
 const (
-        usernameField        = "username"
-        passwordField        = "password"
-        sourceField          = "source"
-        subDirField          = "subdir"
-        domainField          = "domain"
-        mountOptionsField    = "mountoptions"
-        defaultDomainName    = "AZURE"
-        pvcNameKey           = "csi.storage.k8s.io/pvc/name"
-        pvcNamespaceKey      = "csi.storage.k8s.io/pvc/namespace"
-        pvNameKey            = "csi.storage.k8s.io/pv/name"
-        pvcNameMetadata      = "${pvc.metadata.name}"
-        pvcNamespaceMetadata = "${pvc.metadata.namespace}"
-        pvNameMetadata       = "${pv.metadata.name}"
+	usernameField        = "username"
+	passwordField        = "password"
+	sourceField          = "source"
+	subDirField          = "subdir"
+	domainField          = "domain"
+	mountOptionsField    = "mountoptions"
+	defaultDomainName    = "AZURE"
+	pvcNameKey           = "csi.storage.k8s.io/pvc/name"
+	pvcNamespaceKey      = "csi.storage.k8s.io/pvc/namespace"
+	pvNameKey            = "csi.storage.k8s.io/pv/name"
+	pvcNameMetadata      = "${pvc.metadata.name}"
+	pvcNamespaceMetadata = "${pvc.metadata.namespace}"
+	pvNameMetadata       = "${pv.metadata.name}"
 )
-
 
 func safeMounter(m mount.Interface) *mount.SafeFormatAndMount {
 	p, ok := m.(*mount.SafeFormatAndMount)
@@ -181,34 +180,34 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	mountFlags := "rw"
 	var source, subDir string
 	subDirReplaceMap := map[string]string{}
-/*
-	TODO - defined and parse context as necessary later 
-	mountFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
-	volumeMountGroup := req.GetVolumeCapability().GetMount().GetVolumeMountGroup()
-	secrets := req.GetSecrets()
-	gidPresent := checkGidPresentInMountFlags(mountFlags)
+	/*
+		TODO - defined and parse context as necessary later
+		mountFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
+		volumeMountGroup := req.GetVolumeCapability().GetMount().GetVolumeMountGroup()
+		secrets := req.GetSecrets()
+		gidPresent := checkGidPresentInMountFlags(mountFlags)
 
-	var source, subDir string
-	subDirReplaceMap := map[string]string{}
-	for k, v := range context {
-		switch strings.ToLower(k) {
-		case sourceField:
-			source = v
-		case subDirField:
-			subDir = v
-		case pvcNamespaceKey:
-			subDirReplaceMap[pvcNamespaceMetadata] = v
-		case pvcNameKey:
-			subDirReplaceMap[pvcNameMetadata] = v
-		case pvNameKey:
-			subDirReplaceMap[pvNameMetadata] = v
+		var source, subDir string
+		subDirReplaceMap := map[string]string{}
+		for k, v := range context {
+			switch strings.ToLower(k) {
+			case sourceField:
+				source = v
+			case subDirField:
+				subDir = v
+			case pvcNamespaceKey:
+				subDirReplaceMap[pvcNamespaceMetadata] = v
+			case pvcNameKey:
+				subDirReplaceMap[pvcNameMetadata] = v
+			case pvNameKey:
+				subDirReplaceMap[pvNameMetadata] = v
+			}
 		}
-	}
 
-	if source == "" {
-		return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("%s field is missing, current context: %v", sourceField, context))
-	}
- */
+		if source == "" {
+			return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("%s field is missing, current context: %v", sourceField, context))
+		}
+	*/
 
 	if acquired := d.volumeLocks.TryAcquire(volumeID); !acquired {
 		return nil, status.Errorf(codes.Aborted, utils.VolumeOperationAlreadyExistsFmt, volumeID)
@@ -216,21 +215,21 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	defer d.volumeLocks.Release(volumeID)
 
 	// var username, password, domain string
-/*
-	for k, v := range secrets {
-		switch strings.ToLower(k) {
-		case usernameField:
-			username = strings.TrimSpace(v)
-		case passwordField:
-			password = strings.TrimSpace(v)
-		case domainField:
-			domain = strings.TrimSpace(v)
+	/*
+		for k, v := range secrets {
+			switch strings.ToLower(k) {
+			case usernameField:
+				username = strings.TrimSpace(v)
+			case passwordField:
+				password = strings.TrimSpace(v)
+			case domainField:
+				domain = strings.TrimSpace(v)
+			}
 		}
-	}
 
-	// in guest login, username and password options are not needed
-	requireUsernamePwdOption := !hasGuestMountOptions(mountFlags)
-*/
+		// in guest login, username and password options are not needed
+		requireUsernamePwdOption := !hasGuestMountOptions(mountFlags)
+	*/
 
 	var mountOptions, sensitiveMountOptions []string
 	klog.V(2).Infof("NodeStageVolume: targetPath(%v) volumeID(%v) context(%v) mountflags(%v) mountOptions(%v)",
@@ -352,7 +351,6 @@ func checkGidPresentInMountFlags(mountFlags []string) bool {
 	}
 	return false
 }
-
 
 func Mount(m *mount.SafeFormatAndMount, source, target, fsType string, mountOptions, sensitiveMountOptions []string) error {
 	proxy := nfsMounter(m.Interface)

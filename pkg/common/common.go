@@ -61,7 +61,7 @@ type DriverOptions struct {
 	DriverName           string
 	Mode                 DriverMode
 	EnableGetVolumeStats bool
-	Endpoint string
+	Endpoint             string
 
 	SmbOpts   SmbDriverOptions
 	IscsiOpts IscsiDriverOptions

@@ -4,9 +4,9 @@ import (
 	"k8s.io/klog/v2"
 
 	"github.com/sulakshm/csi-driver/pkg/common"
-	smb "github.com/sulakshm/csi-driver/pkg/smb"
 	iscsi "github.com/sulakshm/csi-driver/pkg/iscsi"
 	nfs "github.com/sulakshm/csi-driver/pkg/nfs"
+	smb "github.com/sulakshm/csi-driver/pkg/smb"
 )
 
 const (
@@ -24,9 +24,9 @@ const (
 	pvcNameMetadata      = "${pvc.metadata.name}"
 	pvcNamespaceMetadata = "${pvc.metadata.namespace}"
 	pvNameMetadata       = "${pv.metadata.name}"
-	driverModeSmb       = "smb"
-        driverModeIscsi     = "iscsi"
-	driverModeNfs       = "nfs"
+	driverModeSmb        = "smb"
+	driverModeIscsi      = "iscsi"
+	driverModeNfs        = "nfs"
 )
 
 // NewDriver Creates a NewCSIDriver object. Assumes vendor version is equal to driver version &

@@ -25,8 +25,8 @@ import (
 	csicommon "github.com/sulakshm/csi-driver/pkg/csi-common"
 	klog "k8s.io/klog/v2"
 
-	"github.com/sulakshm/csi-driver/pkg/utils"
 	"github.com/sulakshm/csi-driver/pkg/mounter"
+	"github.com/sulakshm/csi-driver/pkg/utils"
 	mount "k8s.io/mount-utils"
 )
 
@@ -34,11 +34,11 @@ type nfsDriver struct {
 	csicommon.CSIDriver
 	mounter mount.Interface
 
-        // A map storing all volumes with ongoing operations so that additional operations
-        // for that same volume (as defined by VolumeID) return an Aborted error
-        volumeLocks          *utils.VolumeLocks
+	// A map storing all volumes with ongoing operations so that additional operations
+	// for that same volume (as defined by VolumeID) return an Aborted error
+	volumeLocks *utils.VolumeLocks
 
-	enableGetVolumeStats bool // whether stats on volume is available - not supported
+	enableGetVolumeStats bool   // whether stats on volume is available - not supported
 	endpoint             string // csi socket end point to receive/respond to reqs
 }
 
@@ -64,11 +64,11 @@ func NewDriver(name, version string, options *common.DriverOptions) *nfsDriver {
 	d.AddVolumeCapabilityAccessModes([]csi.VolumeCapability_AccessMode_Mode{
 		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 		csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY,
-                csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER,
-                csi.VolumeCapability_AccessMode_SINGLE_NODE_MULTI_WRITER,
-                csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
-                csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER,
-                csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+		csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER,
+		csi.VolumeCapability_AccessMode_SINGLE_NODE_MULTI_WRITER,
+		csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
+		csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER,
+		csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
 	})
 	// Nfs plugin does not support ControllerServiceCapability now.
 	// If support is added, it should set to appropriate
