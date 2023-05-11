@@ -997,6 +997,21 @@ func (mounter *csiProxyMounter) NfsMount(
 	klog.V(2).Infof("NfsMount: other args fsType %s, options %v, %v",
 		fstype, mountOptions, sensitiveMountOptions)
 
+	// check if the temp workDir exists, if not create it.
+	{
+		exists, err := mounter.ExistsPath(workDir)
+		if err != nil {
+			return fmt.Errorf("work dir: %s exist check failed with err: %v", workDir, err)
+		}
+
+		if !exists {
+			klog.V(2).Infof("work directory %s does not exists. Creating the directory", workDir)
+			if err := mounter.MakeDir(workDir); err != nil {
+				return fmt.Errorf("create of work dir: %s failed with error: %v", workDir, err)
+			}
+		}
+	}
+
 	parentDir := filepath.Dir(target)
 	parentExists, err := mounter.ExistsPath(parentDir)
 	if err != nil {
