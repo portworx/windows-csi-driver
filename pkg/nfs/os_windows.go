@@ -45,6 +45,9 @@ import (
 
 // / TODO prune and decide the proper context fields to be exchanged
 const (
+	nfsEndPointKey  = "nfsendpoint"
+	nfsSharePathKey = "exportpath"
+
 	usernameField        = "username"
 	passwordField        = "password"
 	sourceField          = "source"
@@ -69,13 +72,20 @@ func safeMounter(m mount.Interface) *mount.SafeFormatAndMount {
 	return p
 }
 
-func nfsMounter(m mount.Interface) mounter.NfsMounter {
-	i, ok := m.(mounter.NfsMounter)
+/*
+func csiMounter(m mount.Interface) mounter.NfsMounter {
+	p, ok := m.(*mount.SafeFormatAndMount)
+	if !ok {
+		klog.Fatalf("cannot dereference to needed mount.SafeFormatAndMount")
+	}
+
+	p1, ok := p.Interface.(mounter.NfsMounter)
 	if !ok {
 		klog.Fatalf("cannot dereference to needed NfsMounter")
 	}
-	return i
+	return p1
 }
+*/
 
 func csiMounter(m mount.Interface) mounter.CSIProxyMounter {
 	p, ok := m.(*mount.SafeFormatAndMount)
@@ -176,62 +186,31 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 		return nil, status.Error(codes.InvalidArgument, "Staging target not provided")
 	}
 
-	context := req.GetVolumeContext()
+	context := req.GetPublishContext()
 	mountFlags := "rw"
-	var source, subDir string
-	subDirReplaceMap := map[string]string{}
-	/*
-		TODO - defined and parse context as necessary later
-		mountFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
-		volumeMountGroup := req.GetVolumeCapability().GetMount().GetVolumeMountGroup()
-		secrets := req.GetSecrets()
-		gidPresent := checkGidPresentInMountFlags(mountFlags)
+	endpoint, ok := context[nfsEndPointKey]
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, "nfs endpoint not specified in context")
+	}
 
-		var source, subDir string
-		subDirReplaceMap := map[string]string{}
-		for k, v := range context {
-			switch strings.ToLower(k) {
-			case sourceField:
-				source = v
-			case subDirField:
-				subDir = v
-			case pvcNamespaceKey:
-				subDirReplaceMap[pvcNamespaceMetadata] = v
-			case pvcNameKey:
-				subDirReplaceMap[pvcNameMetadata] = v
-			case pvNameKey:
-				subDirReplaceMap[pvNameMetadata] = v
-			}
-		}
+	sharepath, ok := context[nfsSharePathKey]
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, "nfs share path not specified in context")
+	}
 
-		if source == "" {
-			return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("%s field is missing, current context: %v", sourceField, context))
-		}
-	*/
+	// THis path needs to be normalized, that happens within mounter package
+	source := fmt.Sprintf("\\\\%s\\%s", endpoint, sharepath)
+
+	klog.V(2).Infof("NodeStageVolume: volume %s, nfs endpoint(%v), share(%v) - full source %s",
+		volumeID, endpoint, sharepath, source)
 
 	if acquired := d.volumeLocks.TryAcquire(volumeID); !acquired {
 		return nil, status.Errorf(codes.Aborted, utils.VolumeOperationAlreadyExistsFmt, volumeID)
 	}
 	defer d.volumeLocks.Release(volumeID)
 
-	// var username, password, domain string
-	/*
-		for k, v := range secrets {
-			switch strings.ToLower(k) {
-			case usernameField:
-				username = strings.TrimSpace(v)
-			case passwordField:
-				password = strings.TrimSpace(v)
-			case domainField:
-				domain = strings.TrimSpace(v)
-			}
-		}
-
-		// in guest login, username and password options are not needed
-		requireUsernamePwdOption := !hasGuestMountOptions(mountFlags)
-	*/
-
-	var mountOptions, sensitiveMountOptions []string
+	mountOptions := []string{"bind"}
+	sensitiveMountOptions := []string{}
 	klog.V(2).Infof("NodeStageVolume: targetPath(%v) volumeID(%v) context(%v) mountflags(%v) mountOptions(%v)",
 		targetPath, volumeID, context, mountFlags, mountOptions)
 
@@ -245,16 +224,11 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 		if err = prepareStagePath(targetPath, safeMounter(d.mounter)); err != nil {
 			return nil, fmt.Errorf("prepare stage path failed for %s with error: %v", targetPath, err)
 		}
-		if subDir != "" {
-			// replace pv/pvc name namespace metadata in subDir
-			subDir = replaceWithMap(subDir, subDirReplaceMap)
-
-			source = strings.TrimRight(source, "/")
-			source = fmt.Sprintf("%s/%s", source, subDir)
-		}
 		mountComplete := false
 		err = wait.PollImmediate(1*time.Second, 2*time.Minute, func() (bool, error) {
-			err := Mount(safeMounter(d.mounter), source, targetPath, "cifs", mountOptions, sensitiveMountOptions)
+			m := csiMounter(d.mounter)
+			err := m.NfsMount(source, targetPath, "nfs", mountOptions, sensitiveMountOptions)
+			//err := Mount(safeMounter(d.mounter), source, targetPath, "nfs", mountOptions, sensitiveMountOptions)
 			mountComplete = true
 			return true, err
 		})
@@ -287,7 +261,8 @@ func (d *nfsDriver) nfsNodeUnstageVolume(ctx context.Context, req *csi.NodeUnsta
 	defer d.volumeLocks.Release(volumeID)
 
 	klog.V(2).Infof("NodeUnstageVolume: CleanupMountPoint on %s with volume %s", stagingTargetPath, volumeID)
-	if err := CleanupNfsMountPoint(safeMounter(d.mounter), stagingTargetPath, true /*extensiveMountPointCheck*/); err != nil {
+	m := csiMounter(d.mounter)
+	if err := m.NfsUnmount(stagingTargetPath); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to unmount staging target %q: %v", stagingTargetPath, err)
 	}
 
@@ -353,50 +328,42 @@ func checkGidPresentInMountFlags(mountFlags []string) bool {
 }
 
 func Mount(m *mount.SafeFormatAndMount, source, target, fsType string, mountOptions, sensitiveMountOptions []string) error {
-	proxy := nfsMounter(m.Interface)
+	proxy := csiMounter(m.Interface)
 	return proxy.NfsMount(source, target, fsType, mountOptions, sensitiveMountOptions)
 }
 
+/*
 func Unmount(m *mount.SafeFormatAndMount, target string) error {
 	proxy := csiMounter(m.Interface)
-	return proxy.Unmount(target)
+	return proxy.NfsUnmount(target)
 }
+*/
 
 func RemoveStageTarget(m *mount.SafeFormatAndMount, target string) error {
-	proxy := csiMounter(m.Interface)
-	return proxy.Rmdir(target)
-}
-
-// CleanupNfsMountPoint - In windows CSI proxy call to umount is used to unmount the SMB.
-// The clean up mount point point calls is supposed for fix the corrupted directories as well.
-// For alpha CSI proxy integration, we only do an unmount.
-func CleanupNfsMountPoint(m *mount.SafeFormatAndMount, target string, extensiveMountCheck bool) error {
-	return Unmount(m, target)
+	// proxy := csiMounter(m.Interface)
+	// return proxy.Rmdir(target)
+	if err := os.Remove(target); err != nil {
+		klog.V(2).Infof("Removing path: %s, failed %v", target, err)
+	}
+	return nil
 }
 
 func CleanupMountPoint(m *mount.SafeFormatAndMount, target string, extensiveMountCheck bool) error {
-	if proxy, ok := m.Interface.(mounter.CSIProxyMounter); ok {
-		return proxy.Rmdir(target)
+	if err := os.Remove(target); err != nil {
+		klog.V(2).Infof("Removing path: %s, failed %v", target, err)
 	}
-	return fmt.Errorf("could not cast to csi proxy class")
+	return nil
 }
 
 func removeDir(path string, m *mount.SafeFormatAndMount) error {
-	if proxy, ok := m.Interface.(mounter.CSIProxyMounter); ok {
-		isExists, err := proxy.ExistsPath(path)
-		if err != nil {
-			return err
+	klog.V(4).Infof("Removing path: %s", path)
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
 		}
-
-		if isExists {
-			klog.V(4).Infof("Removing path: %s", path)
-			if err = proxy.Rmdir(path); err != nil {
-				return err
-			}
-		}
-		return nil
+		return err
 	}
-	return fmt.Errorf("could not cast to csi proxy class")
+	return nil
 }
 
 // preparePublishPath - In case of windows, the publish code path creates a soft link
@@ -411,10 +378,7 @@ func prepareStagePath(path string, m *mount.SafeFormatAndMount) error {
 }
 
 func Mkdir(m *mount.SafeFormatAndMount, name string, perm os.FileMode) error {
-	if proxy, ok := m.Interface.(mounter.CSIProxyMounter); ok {
-		return proxy.MakeDir(name)
-	}
-	return fmt.Errorf("could not cast to csi proxy class")
+	return os.MkdirAll(name, 0750)
 }
 
 func IsCorruptedDir(dir string) bool {

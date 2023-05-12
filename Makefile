@@ -27,7 +27,7 @@ include release-tools/build.make
 GIT_COMMIT ?= $(shell git rev-parse HEAD)
 REGISTRY ?= docker.io/sulakshm
 REGISTRY_NAME = $(shell echo $(REGISTRY) | sed "s/.azurecr.io//g")
-IMAGE_VERSION ?= v0.1.wip
+IMAGE_VERSION ?= v0.1.nfs
 VERSION ?= latest
 # Use a custom version for E2E tests if we are testing in CI
 ifdef CI

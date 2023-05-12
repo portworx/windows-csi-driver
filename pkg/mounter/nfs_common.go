@@ -29,8 +29,6 @@ type NfsMounter interface {
 	DriveExists(volid string) (bool, error)
 	MkLink(volid, target string) error
 	RmLink(volid, target string) error
-	MkVolume(volid string) error
-	RmVolume(volid string) error
 }
 
 type stubNfsMounter struct{}

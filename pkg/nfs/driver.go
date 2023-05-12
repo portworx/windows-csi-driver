@@ -50,6 +50,8 @@ func NewDriver(name, version string, options *common.DriverOptions) *nfsDriver {
 	d.Name = name
 	d.Version = version
 	d.NodeID = options.NodeID
+
+	d.volumeLocks = utils.NewVolumeLocks()
 	d.enableGetVolumeStats = options.EnableGetVolumeStats
 	d.endpoint = options.Endpoint
 
