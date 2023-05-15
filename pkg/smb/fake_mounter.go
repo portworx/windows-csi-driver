@@ -21,8 +21,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/sulakshm/csi-driver/pkg/mounter"
 	"github.com/sulakshm/csi-driver/pkg/common"
+	"github.com/sulakshm/csi-driver/pkg/mounter"
 
 	mount "k8s.io/mount-utils"
 )
@@ -66,7 +66,7 @@ func (f *fakeMounter) IsLikelyNotMountPoint(file string) (bool, error) {
 
 func NewFakeMounter() (*mount.SafeFormatAndMount, error) {
 	if runtime.GOOS == "windows" {
-		return mounter.NewSafeMounter(common.DriverModeSmb, true)
+		return mounter.NewSafeMounter(common.DriverModeSmb, false, true)
 	}
 	return &mount.SafeFormatAndMount{
 		Interface: &fakeMounter{},

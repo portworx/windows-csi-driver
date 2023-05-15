@@ -89,7 +89,7 @@ func NewDriver(name, version string, options *common.DriverOptions) *nfsDriver {
 
 	// CHECK if this is needed for nfs
 	var err error
-	d.mounter, err = mounter.NewSafeMounter(common.DriverModeNfs, false)
+	d.mounter, err = mounter.NewSafeMounter(common.DriverModeNfs, options.NfsOpts.Persist, false)
 	if err != nil {
 		klog.Fatalf("Failed to get safe mounter. Error: %v", err)
 	}
@@ -97,8 +97,8 @@ func NewDriver(name, version string, options *common.DriverOptions) *nfsDriver {
 	return &d
 }
 
-func (d *nfsDriver) GetMode() common.DriverMode {
-	return common.DriverModeNfs
+func (d *nfsDriver) GetMode() common.DriverModeFlag {
+	return common.DriverModeFlagNfs
 }
 
 func (d *nfsDriver) Init() {

@@ -41,26 +41,8 @@ import (
 	"github.com/sulakshm/csi-driver/pkg/mounter"
 	"golang.org/x/net/context"
 	mount "k8s.io/mount-utils"
-)
 
-// / TODO prune and decide the proper context fields to be exchanged
-const (
-	nfsEndPointKey  = "nfsendpoint"
-	nfsSharePathKey = "exportpath"
-
-	usernameField        = "username"
-	passwordField        = "password"
-	sourceField          = "source"
-	subDirField          = "subdir"
-	domainField          = "domain"
-	mountOptionsField    = "mountoptions"
-	defaultDomainName    = "AZURE"
-	pvcNameKey           = "csi.storage.k8s.io/pvc/name"
-	pvcNamespaceKey      = "csi.storage.k8s.io/pvc/namespace"
-	pvNameKey            = "csi.storage.k8s.io/pv/name"
-	pvcNameMetadata      = "${pvc.metadata.name}"
-	pvcNamespaceMetadata = "${pvc.metadata.namespace}"
-	pvNameMetadata       = "${pv.metadata.name}"
+	"github.com/sulakshm/csi-driver/pkg/common"
 )
 
 func safeMounter(m mount.Interface) *mount.SafeFormatAndMount {
@@ -71,21 +53,6 @@ func safeMounter(m mount.Interface) *mount.SafeFormatAndMount {
 
 	return p
 }
-
-/*
-func csiMounter(m mount.Interface) mounter.NfsMounter {
-	p, ok := m.(*mount.SafeFormatAndMount)
-	if !ok {
-		klog.Fatalf("cannot dereference to needed mount.SafeFormatAndMount")
-	}
-
-	p1, ok := p.Interface.(mounter.NfsMounter)
-	if !ok {
-		klog.Fatalf("cannot dereference to needed NfsMounter")
-	}
-	return p1
-}
-*/
 
 func csiMounter(m mount.Interface) mounter.CSIProxyMounter {
 	p, ok := m.(*mount.SafeFormatAndMount)
@@ -188,12 +155,12 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 
 	context := req.GetPublishContext()
 	mountFlags := "rw"
-	endpoint, ok := context[nfsEndPointKey]
+	endpoint, ok := context[common.EndpointField]
 	if !ok {
 		return nil, status.Error(codes.InvalidArgument, "nfs endpoint not specified in context")
 	}
 
-	sharepath, ok := context[nfsSharePathKey]
+	sharepath, ok := context[common.SharePathField]
 	if !ok {
 		return nil, status.Error(codes.InvalidArgument, "nfs share path not specified in context")
 	}
@@ -332,16 +299,7 @@ func Mount(m *mount.SafeFormatAndMount, source, target, fsType string, mountOpti
 	return proxy.NfsMount(source, target, fsType, mountOptions, sensitiveMountOptions)
 }
 
-/*
-func Unmount(m *mount.SafeFormatAndMount, target string) error {
-	proxy := csiMounter(m.Interface)
-	return proxy.NfsUnmount(target)
-}
-*/
-
 func RemoveStageTarget(m *mount.SafeFormatAndMount, target string) error {
-	// proxy := csiMounter(m.Interface)
-	// return proxy.Rmdir(target)
 	if err := os.Remove(target); err != nil {
 		klog.V(2).Infof("Removing path: %s, failed %v", target, err)
 	}
@@ -390,7 +348,7 @@ func IsCorruptedDir(dir string) bool {
 func getMountOptions(context map[string]string) string {
 	for k, v := range context {
 		switch strings.ToLower(k) {
-		case mountOptionsField:
+		case common.MountOptionsField:
 			return v
 		}
 	}

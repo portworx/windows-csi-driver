@@ -42,13 +42,13 @@ var driverName string
 func NewDriver(name, version string, options *common.DriverOptions) *iscsiDriver {
 	d := iscsiDriver{}
 	klog.V(1).Infof("iscsiDriver: %s version: %s nodeID: %s endpoint: %s", name, version, options.NodeID,
-		options.IscsiOpts.Endpoint)
+		options.Endpoint)
 
 	d.Name = name
 	d.Version = version
 	d.NodeID = options.NodeID
 	d.enableGetVolumeStats = options.EnableGetVolumeStats
-	d.endpoint = options.IscsiOpts.Endpoint
+	d.endpoint = options.Endpoint
 
 	driverName = name
 
@@ -76,7 +76,7 @@ func NewDriver(name, version string, options *common.DriverOptions) *iscsiDriver
 	d.AddNodeServiceCapabilities(nodeCap)
 
 	var err error
-	d.mounter, err = mounter.NewSafeMounter(common.DriverModeIscsi, false)
+	d.mounter, err = mounter.NewSafeMounter(common.DriverModeIscsi, options.NfsOpts.Persist, false)
 	if err != nil {
 		klog.Fatalf("Failed to get safe mounter. Error: %v", err)
 	}
@@ -84,8 +84,8 @@ func NewDriver(name, version string, options *common.DriverOptions) *iscsiDriver
 	return &d
 }
 
-func (d *iscsiDriver) GetMode() common.DriverMode {
-	return common.DriverModeIscsi
+func (d *iscsiDriver) GetMode() common.DriverModeFlag {
+	return common.DriverModeFlagIscsi
 }
 
 func (d *iscsiDriver) Init() {
