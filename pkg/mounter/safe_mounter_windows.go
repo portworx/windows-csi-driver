@@ -926,9 +926,11 @@ func (mounter *csiProxyMounter) AddDrive(
 		volid, share_path, sensitiveMountOptions)
 
 	volName := volid
-	cmdLine := fmt.Sprintf(`New-PSDrive -Name ${Env:volid} ` +
-		`-PSProvider FileSystem ` +
-		`-Root ${Env:path} -Scope Global -Description ${Env:pwxtag} -Persist`)
+	cmdLine := fmt.Sprintf(`$PWord = ConvertTo-SecureString -String Password1 -AsPlainText -Force` +
+                `;$Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList ("Administrator", $PWord);` +
+		`New-PSDrive -Name ${Env:volid} ` +
+		`-PSProvider FileSystem -Credential $Credential ` +
+		`-Root ${Env:path} -Scope Global -Description ${Env:pwxtag}`)
 	if mounter.Persist {
 		volName = "Z"
 		cmdLine += " -Persist"

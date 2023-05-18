@@ -161,16 +161,16 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 		return nil, status.Error(codes.InvalidArgument, "nfs endpoint not specified in context")
 	}
 
-	sharepath, ok := context[common.SharePathField]
+	exportpath, ok := context[common.ExportpathField]
 	if !ok {
-		return nil, status.Error(codes.InvalidArgument, "nfs share path not specified in context")
+		return nil, status.Error(codes.InvalidArgument, "nfs export path not specified in context")
 	}
 
 	// THis path needs to be normalized, that happens within mounter package
-	source := fmt.Sprintf("\\\\%s\\%s", endpoint, sharepath)
+	source := fmt.Sprintf("\\\\%s\\%s", endpoint, exportpath)
 
 	klog.V(2).Infof("NodeStageVolume: volume %s, nfs endpoint(%v), share(%v) - full source %s",
-		volumeID, endpoint, sharepath, source)
+		volumeID, endpoint, exportpath, source)
 
 	if acquired := d.volumeLocks.TryAcquire(volumeID); !acquired {
 		return nil, status.Errorf(codes.Aborted, utils.VolumeOperationAlreadyExistsFmt, volumeID)
@@ -199,8 +199,8 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 		mountComplete := false
 		err = wait.PollImmediate(1*time.Second, 2*time.Minute, func() (bool, error) {
 			m := csiMounter(d.mounter)
-			//err := m.NfsMount(source, targetPath, "nfs", mountOptions, sensitiveMountOptions)
-			err := m.SMBMount(source, targetPath, "cifs", mountOptions, sensitiveMountOptions)
+			err := m.NfsMount(source, targetPath, "nfs", mountOptions, sensitiveMountOptions)
+			//err := m.SMBMount(source, targetPath, "cifs", mountOptions, sensitiveMountOptions)
 			//err := Mount(safeMounter(d.mounter), source, targetPath, "nfs", mountOptions, sensitiveMountOptions)
 			mountComplete = true
 			return true, err
@@ -235,8 +235,8 @@ func (d *nfsDriver) nfsNodeUnstageVolume(ctx context.Context, req *csi.NodeUnsta
 
 	klog.V(2).Infof("NodeUnstageVolume: CleanupMountPoint on %s with volume %s", stagingTargetPath, volumeID)
 	m := csiMounter(d.mounter)
-	if err := m.SMBUnmount(stagingTargetPath); err != nil {
-	//if err := m.NfsUnmount(stagingTargetPath); err != nil {
+	//if err := m.SMBUnmount(stagingTargetPath); err != nil {
+	if err := m.NfsUnmount(stagingTargetPath); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to unmount staging target %q: %v", stagingTargetPath, err)
 	}
 

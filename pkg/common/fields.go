@@ -28,4 +28,5 @@ const (
 	SharePathField   = "sharePathKey"   // remote share path
 	EndpointField    = "endpointKey"    // remote endpoint
 	SvcEndpointField = "svcEndpointKey" // remote service endpoint
+	ExportpathField = "exportPath" //export point for nfs
 )
