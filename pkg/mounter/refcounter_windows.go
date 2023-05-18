@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"k8s.io/klog/v2"
 )
 
 var basePath = "c:\\csi\\smbmounts"
@@ -72,6 +73,7 @@ func getRootMappingPath(path string) (string, error) {
 //     So, in incementRemotePathReferencesCount we create the file. In decrementRemotePathReferencesCount we remove the file.
 //     Example: c:\\csi\\smbmounts\\hostname\\sharename\\092f1413e6c1d03af8b5da6f44619af8
 func incementRemotePathReferencesCount(mappingPath, remotePath string) error {
+	klog.V(4).Infof("incementRemotePathReferencesCount %s %s", mappingPath, remotePath)
 	remotePath = strings.TrimSuffix(remotePath, "\\")
 	path := filepath.Join(basePath, strings.TrimPrefix(mappingPath, "\\\\"))
 	if err := os.MkdirAll(path, os.ModeDir); err != nil {
@@ -93,13 +95,22 @@ func incementRemotePathReferencesCount(mappingPath, remotePath string) error {
 // decrementRemotePathReferencesCount - removes reference between mappingPath and remotePath.
 // See incementRemotePathReferencesCount to understand how references work.
 func decrementRemotePathReferencesCount(mappingPath, remotePath string) error {
+	klog.V(4).Infof("decrementRemotePathReferencesCount %s %s", mappingPath, remotePath)
 	remotePath = strings.TrimSuffix(remotePath, "\\")
+	mappingPath = strings.TrimPrefix(mappingPath, "\\\\c:\\")
+	klog.V(4).Infof("decrementRemotePathReferencesCount %s %s", mappingPath, remotePath)
 	path := filepath.Join(basePath, strings.TrimPrefix(mappingPath, "\\\\"))
-	if err := os.MkdirAll(path, os.ModeDir); err != nil {
+	klog.V(4).Infof("decrementRemotePathReferencesCount path %s", path)
+	err := os.MkdirAll(path, os.ModeDir)
+	if err != nil && !os.IsExist(err) {
 		return err
 	}
 	filePath := filepath.Join(path, getMd5(remotePath))
-	return os.Remove(filePath)
+	err = os.Remove(filePath)
+	if err != nil && os.IsNotExist(err) {
+		 err = nil
+	}
+	return err
 }
 
 // getRemotePathReferencesCount - returns count of references between mappingPath and remotePath.

@@ -107,6 +107,7 @@ func (d *nfsDriver) nfsNodePublishVolume(ctx context.Context, req *csi.NodePubli
 
 	klog.V(2).Infof("NodePublishVolume: mounting %s at %s with mountOptions: %v volumeID(%s)", source, target, mountOptions, volumeID)
 	if err := d.mounter.Mount(source, target, "", mountOptions); err != nil {
+		klog.V(2).Infof("NodePublishVolume: mounting %s at %s with mountOptions: %v volumeID(%s) Failed with error [%v]", source, target, mountOptions, volumeID, err)
 		if removeErr := os.Remove(target); removeErr != nil {
 			return nil, status.Errorf(codes.Internal, "Could not remove mount target %q: %v", target, removeErr)
 		}
@@ -176,8 +177,12 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	}
 	defer d.volumeLocks.Release(volumeID)
 
-	mountOptions := []string{"bind"}
-	sensitiveMountOptions := []string{}
+	username := context[common.UsernameField]
+	password := context[common.PasswordField]
+
+	mountOptions := []string{username, volumeID}
+	sensitiveMountOptions := []string{password}
+
 	klog.V(2).Infof("NodeStageVolume: targetPath(%v) volumeID(%v) context(%v) mountflags(%v) mountOptions(%v)",
 		targetPath, volumeID, context, mountFlags, mountOptions)
 
@@ -194,7 +199,8 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 		mountComplete := false
 		err = wait.PollImmediate(1*time.Second, 2*time.Minute, func() (bool, error) {
 			m := csiMounter(d.mounter)
-			err := m.NfsMount(source, targetPath, "nfs", mountOptions, sensitiveMountOptions)
+			//err := m.NfsMount(source, targetPath, "nfs", mountOptions, sensitiveMountOptions)
+			err := m.SMBMount(source, targetPath, "cifs", mountOptions, sensitiveMountOptions)
 			//err := Mount(safeMounter(d.mounter), source, targetPath, "nfs", mountOptions, sensitiveMountOptions)
 			mountComplete = true
 			return true, err
@@ -229,7 +235,8 @@ func (d *nfsDriver) nfsNodeUnstageVolume(ctx context.Context, req *csi.NodeUnsta
 
 	klog.V(2).Infof("NodeUnstageVolume: CleanupMountPoint on %s with volume %s", stagingTargetPath, volumeID)
 	m := csiMounter(d.mounter)
-	if err := m.NfsUnmount(stagingTargetPath); err != nil {
+	if err := m.SMBUnmount(stagingTargetPath); err != nil {
+	//if err := m.NfsUnmount(stagingTargetPath); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to unmount staging target %q: %v", stagingTargetPath, err)
 	}
 

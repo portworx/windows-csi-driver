@@ -126,7 +126,8 @@ func (d *smbDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolum
 		return nil, status.Error(codes.InvalidArgument, "Staging target not provided")
 	}
 
-	context := req.GetVolumeContext()
+	// context := req.GetVolumeContext()
+	context := req.GetPublishContext()
 	mountFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
 	volumeMountGroup := req.GetVolumeCapability().GetMount().GetVolumeMountGroup()
 	secrets := req.GetSecrets()
@@ -136,7 +137,7 @@ func (d *smbDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolum
 	subDirReplaceMap := map[string]string{}
 	for k, v := range context {
 		switch strings.ToLower(k) {
-		case common.SourceField:
+		case common.SharePathField:
 			source = v
 		case common.SubDirField:
 			subDir = v
@@ -150,7 +151,7 @@ func (d *smbDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolum
 	}
 
 	if source == "" {
-		return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("%s field is missing, current context: %v", common.SourceField, context))
+		return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("%s field is missing, current context: %v", common.SharePathField, context))
 	}
 
 	if acquired := d.volumeLocks.TryAcquire(volumeID); !acquired {

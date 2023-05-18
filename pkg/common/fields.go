@@ -3,13 +3,13 @@ package common
 const (
 	DefaultDriverName = "pxd.portworx.com"
 
-	UsernameField     = "username"
-	PasswordField     = "password"
-	SourceField       = "source"
+	UsernameField     = "usernameField"
+	PasswordField     = "passwordField"
+	// SourceField       = "source"
 	SubDirField       = "subdir"
 	DomainField       = "domain"
 	MountOptionsField = "mountoptions"
-	DefaultDomainName = "AZURE"
+	DefaultDomainName = "WORKGROUP"
 
 	PvcNameKey           = "csi.storage.k8s.io/pvc/name"
 	PvcNamespaceKey      = "csi.storage.k8s.io/pvc/namespace"

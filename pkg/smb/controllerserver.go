@@ -258,7 +258,7 @@ func (d *smbDriver) internalMount(ctx context.Context, vol *smbVolume, volCap *c
 	_, err := d.NodeStageVolume(ctx, &csi.NodeStageVolumeRequest{
 		StagingTargetPath: stagingPath,
 		VolumeContext: map[string]string{
-			common.SourceField: vol.source,
+			common.SharePathField: vol.source,
 		},
 		VolumeCapability: volCap,
 		VolumeId:         vol.id,
@@ -309,7 +309,7 @@ func newSMBVolume(name string, size int64, params map[string]string) (*smbVolume
 	// validate parameters (case-insensitive).
 	for k, v := range params {
 		switch strings.ToLower(k) {
-		case common.SourceField:
+		case common.SharePathField:
 			source = v
 		case common.SubDirField:
 			subDir = v
@@ -325,7 +325,7 @@ func newSMBVolume(name string, size int64, params map[string]string) (*smbVolume
 	}
 
 	if source == "" {
-		return nil, fmt.Errorf("%v is a required parameter", common.SourceField)
+		return nil, fmt.Errorf("%v is a required parameter", common.SharePathField)
 	}
 
 	vol := &smbVolume{
