@@ -155,36 +155,59 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	}
 
 	context := req.GetPublishContext()
-	mountFlags := "rw"
+	csimode, ok := context[common.CsimodeField]
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, "csimode not specified in context")
+	}
+	//mountFlags := "rw"
+
 	endpoint, ok := context[common.EndpointField]
 	if !ok {
 		return nil, status.Error(codes.InvalidArgument, "nfs endpoint not specified in context")
 	}
+	var (
+		exportpath string
+		source string
+		mountOptions []string
+		sensitiveMountOptions []string
+	)
 
-	exportpath, ok := context[common.ExportpathField]
-	if !ok {
-		return nil, status.Error(codes.InvalidArgument, "nfs export path not specified in context")
+	if csimode == "smb" {
+		exportpath, ok = context[common.SharePathField]
+		if !ok {
+			return nil, status.Error(codes.InvalidArgument, "smb export path not specified in context")
+		}
+		source = fmt.Sprintf("\\\\%s\\%s", endpoint, exportpath)
+		username := context[common.UsernameField]
+		if !ok {
+			return nil, status.Error(codes.InvalidArgument, "smb username not specified in context")
+		}
+		password := context[common.PasswordField]
+		if !ok {
+			return nil, status.Error(codes.InvalidArgument, "smb password not specified in context")
+		}
+
+		mountOptions = []string{username, volumeID}
+		sensitiveMountOptions = []string{password}
+	} else if csimode == "nfs" {
+		exportpath, ok= context[common.ExportpathField]
+		if !ok {
+			return nil, status.Error(codes.InvalidArgument, "nfs export path not specified in context")
+		}
+		source = fmt.Sprintf("\\\\%s\\%s", endpoint, exportpath)
+	} else {
+		return nil, fmt.Errorf("csimode %s not a valid mode", csimode)
 	}
 
 	// THis path needs to be normalized, that happens within mounter package
-	source := fmt.Sprintf("\\\\%s\\%s", endpoint, exportpath)
 
-	klog.V(2).Infof("NodeStageVolume: volume %s, nfs endpoint(%v), share(%v) - full source %s",
+	klog.V(2).Infof("NodeStageVolume: volume %s, endpoint(%v), share(%v) - full source %s",
 		volumeID, endpoint, exportpath, source)
 
 	if acquired := d.volumeLocks.TryAcquire(volumeID); !acquired {
 		return nil, status.Errorf(codes.Aborted, utils.VolumeOperationAlreadyExistsFmt, volumeID)
 	}
 	defer d.volumeLocks.Release(volumeID)
-
-	username := context[common.UsernameField]
-	password := context[common.PasswordField]
-
-	mountOptions := []string{username, volumeID}
-	sensitiveMountOptions := []string{password}
-
-	klog.V(2).Infof("NodeStageVolume: targetPath(%v) volumeID(%v) context(%v) mountflags(%v) mountOptions(%v)",
-		targetPath, volumeID, context, mountFlags, mountOptions)
 
 	isDirMounted, err := d.ensureMountPoint(targetPath)
 	if err != nil {
@@ -199,8 +222,11 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 		mountComplete := false
 		err = wait.PollImmediate(1*time.Second, 2*time.Minute, func() (bool, error) {
 			m := csiMounter(d.mounter)
-			err := m.NfsMount(source, targetPath, "nfs", mountOptions, sensitiveMountOptions)
-			//err := m.SMBMount(source, targetPath, "cifs", mountOptions, sensitiveMountOptions)
+			if csimode == "nfs" {
+				err = m.NfsMount(source, targetPath, "nfs", mountOptions, sensitiveMountOptions)
+			} else {
+				err = m.SMBMount(source, targetPath, "cifs", mountOptions, sensitiveMountOptions)
+			}
 			//err := Mount(safeMounter(d.mounter), source, targetPath, "nfs", mountOptions, sensitiveMountOptions)
 			mountComplete = true
 			return true, err
@@ -235,11 +261,9 @@ func (d *nfsDriver) nfsNodeUnstageVolume(ctx context.Context, req *csi.NodeUnsta
 
 	klog.V(2).Infof("NodeUnstageVolume: CleanupMountPoint on %s with volume %s", stagingTargetPath, volumeID)
 	m := csiMounter(d.mounter)
-	//if err := m.SMBUnmount(stagingTargetPath); err != nil {
-	if err := m.NfsUnmount(stagingTargetPath); err != nil {
+	if err := m.NfsUnmount(volumeID, stagingTargetPath); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to unmount staging target %q: %v", stagingTargetPath, err)
 	}
-
 	klog.V(2).Infof("NodeUnstageVolume: unmount volume %s on %s successfully", volumeID, stagingTargetPath)
 	return &csi.NodeUnstageVolumeResponse{}, nil
 }

@@ -80,6 +80,7 @@ func incementRemotePathReferencesCount(mappingPath, remotePath string) error {
 		return err
 	}
 	filePath := filepath.Join(path, getMd5(remotePath))
+	klog.V(4).Infof("incrementRemotePathReferencesCount %s %s %s", mappingPath, remotePath, filePath)
 	file, err := os.Create(filePath)
 	if err != nil {
 		return err
@@ -106,6 +107,7 @@ func decrementRemotePathReferencesCount(mappingPath, remotePath string) error {
 		return err
 	}
 	filePath := filepath.Join(path, getMd5(remotePath))
+	klog.V(4).Infof("decrementRemotePathReferencesCount %s %s %s", mappingPath, remotePath, filePath)
 	err = os.Remove(filePath)
 	if err != nil && os.IsNotExist(err) {
 		 err = nil

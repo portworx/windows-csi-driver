@@ -21,9 +21,9 @@ type DriveInfoObj struct {
 
 type NfsMounter interface {
 	NfsMount(source, target, fsType string, mountOptions, sensitiveMountOptions []string) error
-	NfsUnmount(target string) error
+	NfsUnmount(volumeId string, target string) error
 
-	AddDrive(volid string, share_path string, sensitiveMountOptions []string) error
+	AddDrive(volid string, share_path string, sensitiveMountOptions []string, csimode string) error
 	RmDrive(volid string) error
 	DriveInfo(volid string) (*DriveInfoObj, bool, error)
 	DriveExists(volid string) (bool, error)
@@ -37,6 +37,7 @@ func (nfs *stubNfsMounter) AddDrive(
 	volid string,
 	share_path string,
 	sensitiveMountOptions []string,
+	csimode string,
 ) error {
 	return errStubImpl
 }
@@ -82,6 +83,6 @@ func (nfs *stubNfsMounter) NfsMount(
 	return errStubImpl
 }
 
-func (nfs *stubNfsMounter) NfsUnmount(target string) error {
+func (nfs *stubNfsMounter) NfsUnmount(volumeId string, target string) error {
 	return errStubImpl
 }

@@ -584,7 +584,8 @@ func (mounter *csiProxyMounter) SMBMount(source, target, fsType string, mountOpt
 	klog.V(2).Infof("SMBMount: remote path: %s local path: %s", source, target)
 
 	if len(mountOptions) == 0 || len(sensitiveMountOptions) == 0 {
-		return fmt.Errorf("empty mountOptions(len: %d) or sensitiveMountOptions(len: %d) is not allowed", len(mountOptions), len(sensitiveMountOptions))
+		return fmt.Errorf("empty mountOptions(len: %d) or sensitiveMountOptions(len: %d) is not allowed",
+			len(mountOptions), len(sensitiveMountOptions))
 	}
 
 	parentDir := filepath.Dir(target)
@@ -646,6 +647,15 @@ func (mounter *csiProxyMounter) SMBMount(source, target, fsType string, mountOpt
                 return fmt.Errorf("error mkvolume. cmd %s, output %s, err %v", cmdLine, string(out), err)
         }
 
+	//Create workpath.smb mode file to indicate created by smb mount.
+	tmpFile := fmt.Sprintf("%s%s", workPath, "smb")
+        klog.V(2).Infof("AddDrive Creating file %s", tmpFile)
+	if tmpFh, err2 := os.Create(tmpFile); err2 != nil {
+                klog.V(2).Infof("AddDrive CSImode file: volid %s, failed %v", volid, err2)
+	} else {
+		tmpFh.Close()
+	}
+
 	// Link WorkPath => Target
 	klog.V(2).Infof("Linking %s on %s", normalizedTarget, workPath)
         cmdLine = fmt.Sprintf("mklink /D %s %s", normalizedTarget, workPath)
@@ -666,8 +676,8 @@ func (mounter *csiProxyMounter) SMBMount(source, target, fsType string, mountOpt
 func (mounter *csiProxyMounter) NewSmbGlobalMapping(req *smb.NewSmbGlobalMappingRequest) error {
 	// use PowerShell Environment Variables to store user input string to prevent command line injection
 	// https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-5.1
-	 cmdLine := fmt.Sprintf(`$PWord = ConvertTo-SecureString -String $Env:smbpassword -AsPlainText -Force` +
-		`;$Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList localhost\$Env:smbuser, $PWord` +
+	 cmdLine := fmt.Sprintf(`$PWord = ConvertTo-SecureString -String password -AsPlainText -Force` +
+		`;$Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList localhost\samba, $PWord` +
 		`;New-SmbGlobalMapping -RemotePath $Env:smbremotepath -Credential $Credential -Persistent 1`)
 
 	//cmdLine := fmt.Sprintf(`New-SmbMapping -RemotePath $Env:smbremotepath -username samba -password password -Persistent 1`)
@@ -917,6 +927,7 @@ func (mounter *csiProxyMounter) AddDrive(
 	volid string,
 	share_path string,
 	sensitiveMountOptions []string,
+	csimode string,
 ) error {
 	// runs below.
 	// New-PSDrive -Name 615688357680565485 -PSProvider "FileSystem" -Root "\\10.13.197.205\var\lib\osd\pxns\615688357680565485" -Scope Global -Description "Portworx Network Drive"
@@ -931,10 +942,14 @@ func (mounter *csiProxyMounter) AddDrive(
 		`New-PSDrive -Name ${Env:volid} ` +
 		`-PSProvider FileSystem -Credential $Credential ` +
 		`-Root ${Env:path} -Scope Global -Description ${Env:pwxtag}`)
+/*
 	if mounter.Persist {
 		volName = "Z"
 		cmdLine += " -Persist"
 	}
+*/
+	klog.V(2).Infof("AddDrive: volname %s, target %s, sensitiveOpts %v",
+		volName, share_path, sensitiveMountOptions)
 	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volid=%s", volName),
 		fmt.Sprintf("path=%s", share_path),
 		fmt.Sprintf("pwxtag=%s", pwxtag))
@@ -1133,7 +1148,7 @@ func (mounter *csiProxyMounter) NfsMount(
 
 	// 'source' path has to be of form: //<ip>/var/lib/osd/mounts/<volid>
 	host := parts[0]
-	volid := parts[len(parts)-1]
+	volid := parts[len(parts)-2]
 	// sharename := volid
 
 	unlock := lock(volid)
@@ -1146,7 +1161,7 @@ func (mounter *csiProxyMounter) NfsMount(
 		return err
 	} else if !ok {
 		klog.V(2).Infof("begin to add drive vol %s, from %s on %s", volid, source, normalizedTarget)
-		err := mounter.AddDrive(volid, source, nil)
+		err := mounter.AddDrive(volid, source, nil, "nfs")
 
 		if err != nil {
 			return err
@@ -1163,45 +1178,77 @@ func (mounter *csiProxyMounter) NfsMount(
 		return err
 	}
 
+	tmpPath := fmt.Sprintf("%s%s", volumePath(volid), "nfs")
+        klog.V(2).Infof("AddDrive Creating file %s", tmpPath)
+	if emptyfile, err2 := os.Create(tmpPath); err2 != nil {
+		klog.V(4).Infof("Unable to create tmppath %s %v", volid, err2)
+	} else {
+		emptyfile.Close()
+	}
+
 	if err := incementRemotePathReferencesCount(volid, host); err != nil {
 		return fmt.Errorf("incementMappingPathCount(%s, %s) failed with error: %v", volid, host, err)
 	}
 	return nil
 }
 
-func (mounter *csiProxyMounter) NfsUnmount(target string) error {
+func (mounter *csiProxyMounter) NfsUnmount(volumeId string, target string) error {
+	klog.V(4).Infof("Unmount: local path: %s", target)
+	workPath := volumePath(volumeId)
+	tmpPath := fmt.Sprintf("%s%s", workPath, "nfs")
+	_, err := os.Stat(tmpPath)
+	if os.IsNotExist(err) {
+		tmpPath = fmt.Sprintf("%s%s", workPath, "smb")
+		_, err := os.Stat(tmpPath)
+		if err == nil {
+			ret := mounter.SMBUnmount(target)
+			os.Remove(tmpPath)
+			return ret
+		}
+		tmpPath = fmt.Sprintf("%s%s", workPath, "nfs")
+	} else {
+		klog.V(4).Infof("Unmount: Successful stat of  tmpPath: %s", tmpPath)
+	}
+
+	// Proceed with Nfs Unmount.
 	klog.V(4).Infof("NfsUnmount: local path: %s", target)
 
 	if remotePath, err := os.Readlink(target); err != nil {
 		klog.Warningf("NfsUnmount: can't get remote path: %v", err)
 	} else {
-		remotePath = strings.TrimSuffix(remotePath, "\\")
-		parts := strings.FieldsFunc(remotePath, Split)
-		volid := parts[len(parts)-1]
-		host := parts[0]
-
-		klog.V(4).Infof("NfsUnmount: remote path: %s, mapping path: %s, host %s", remotePath, volid, host)
-
-		unlock := lock(volid)
-		defer unlock()
-
-		if err := decrementRemotePathReferencesCount(volid, host); err != nil {
-			klog.Warningf("NfsUnmount: decrementMappingPathCount(%s, %s) failed with error: %v", volid, host, err)
+		if tmpRemotePath, err := os.Readlink(remotePath); err != nil {
+			klog.Infof("NfsUnmount: Reading link for remotePath %s failed %v", remotePath, err)
 		} else {
-			count := getRemotePathReferencesCount(volid)
-			if count == 0 {
-				klog.V(2).Infof("begin to Nfs volume %s on %s", remotePath, target)
-				mounter.RmLink(volid, target)
-				mounter.rmVolume(volid)
-				mounter.RmDrive(volid)
-				return nil
+			klog.Warningf("NfsUnmount: tmp remote path: %v", tmpRemotePath)
+			tmpRemotePath = strings.TrimSuffix(tmpRemotePath, "\\")
+			parts := strings.FieldsFunc(tmpRemotePath, Split)
+			volid := parts[len(parts)-2]
+			host := parts[0]
+
+			klog.V(4).Infof("NfsUnmount: remote path: %s, mapping path: %s, host %s", tmpRemotePath, volid, host)
+
+			unlock := lock(volid)
+			defer unlock()
+
+			if err := decrementRemotePathReferencesCount(volid, host); err != nil {
+				klog.Warningf("NfsUnmount: decrementMappingPathCount(%s, %s) failed with error: %v", volid, host, err)
 			} else {
-				klog.Infof("NfsUnmount: found %d links to %s", count, volid)
+				count := getRemotePathReferencesCount(volid)
+				if count == 0 {
+					klog.V(2).Infof("begin to Unmount volume %s on %s", remotePath, target)
+					mounter.RmLink(volid, target)
+					mounter.rmVolume(volid)
+					mounter.RmDrive(volid)
+					os.Remove(tmpPath)
+					return nil
+				} else {
+					klog.Infof("NfsUnmount: found %d links to %s", count, volid)
+				}
 			}
 		}
 	}
 
-	err := mounter.Rmdir(target)
+	err = mounter.Rmdir(target)
 	if err != nil {
 		klog.Warningf("NfsUnmount: rmdir %s, failed %s", target, err)
 	}
