@@ -276,6 +276,7 @@ func (d *smbDriver) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCap
 func (d *smbDriver) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
 	return &csi.NodeGetInfoResponse{
 		NodeId: d.NodeID,
+		MaxVolumesPerNode: 100,
 	}, nil
 }
 

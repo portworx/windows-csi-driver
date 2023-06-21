@@ -11,6 +11,10 @@ func volumePath(volid string) string {
 	return fmt.Sprintf("%s\\%s", workDir, volid)
 }
 
+func credFile() string {
+	return fmt.Sprintf("%s\\%s", workDir, "credential.txt")
+}
+
 type DriveInfoObj struct {
 	CurrentLocation string // not sure what is this
 	Name            string // drive name: should match volume id

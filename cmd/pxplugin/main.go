@@ -74,6 +74,7 @@ func handle(modeVal common.DriverModeFlag) {
 		Mode:       modeVal,
 		// EnableGetVolumeStats: *enableGetVolumeStats,
 		WorkDir: *workingMountDir,
+                Endpoint: *endpoint,
 	}
 	driverOptions.SmbOpts.RemoveSMBMappingDuringUnmount = *removeSMBMappingDuringUnmount
 

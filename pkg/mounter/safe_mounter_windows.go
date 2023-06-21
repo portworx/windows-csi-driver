@@ -937,8 +937,7 @@ func (mounter *csiProxyMounter) AddDrive(
 		volid, share_path, sensitiveMountOptions)
 
 	volName := volid
-	cmdLine := fmt.Sprintf(`$PWord = ConvertTo-SecureString -String Password1 -AsPlainText -Force` +
-                `;$Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList ("Administrator", $PWord);` +
+	cmdLine := fmt.Sprintf(`$Credential = Get-StoredCredential -Target  pxd.portworx.cred.com; ` +
 		`New-PSDrive -Name ${Env:volid} ` +
 		`-PSProvider FileSystem -Credential $Credential ` +
 		`-Root ${Env:path} -Scope Global -Description ${Env:pwxtag}`)
@@ -1148,7 +1147,7 @@ func (mounter *csiProxyMounter) NfsMount(
 
 	// 'source' path has to be of form: //<ip>/var/lib/osd/mounts/<volid>
 	host := parts[0]
-	volid := parts[len(parts)-2]
+	volid := parts[len(parts)-1]
 	// sharename := volid
 
 	unlock := lock(volid)
@@ -1222,7 +1221,7 @@ func (mounter *csiProxyMounter) NfsUnmount(volumeId string, target string) error
 			klog.Warningf("NfsUnmount: tmp remote path: %v", tmpRemotePath)
 			tmpRemotePath = strings.TrimSuffix(tmpRemotePath, "\\")
 			parts := strings.FieldsFunc(tmpRemotePath, Split)
-			volid := parts[len(parts)-2]
+			volid := parts[len(parts)-1]
 			host := parts[0]
 
 			klog.V(4).Infof("NfsUnmount: remote path: %s, mapping path: %s, host %s", tmpRemotePath, volid, host)
