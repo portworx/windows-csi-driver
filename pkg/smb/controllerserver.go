@@ -28,7 +28,7 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/klog/v2"
 
-	"github.com/sulakshm/csi-driver/pkg/common"
+	"github.com/portworx/windows-csi-driver/pkg/common"
 )
 
 const (

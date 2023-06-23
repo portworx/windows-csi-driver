@@ -35,7 +35,7 @@ import (
 	iscsi "github.com/kubernetes-csi/csi-proxy/client/api/iscsi/v1alpha2"
 	smb "github.com/kubernetes-csi/csi-proxy/client/api/smb/v1"
 
-	"github.com/sulakshm/csi-driver/pkg/common"
+	"github.com/portworx/windows-csi-driver/pkg/common"
 	"k8s.io/klog/v2"
 	mount "k8s.io/mount-utils"
 	utilexec "k8s.io/utils/exec"

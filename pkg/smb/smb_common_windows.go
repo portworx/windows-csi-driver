@@ -23,7 +23,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sulakshm/csi-driver/pkg/mounter"
+	"github.com/portworx/windows-csi-driver/pkg/mounter"
 	"k8s.io/klog/v2"
 	mount "k8s.io/mount-utils"
 )

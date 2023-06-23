@@ -21,11 +21,11 @@ import (
 	"os"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/sulakshm/csi-driver/pkg/common"
-	csicommon "github.com/sulakshm/csi-driver/pkg/csi-common"
+	"github.com/portworx/windows-csi-driver/pkg/common"
+	csicommon "github.com/portworx/windows-csi-driver/pkg/csi-common"
 	klog "k8s.io/klog/v2"
 
-	"github.com/sulakshm/csi-driver/pkg/mounter"
+	"github.com/portworx/windows-csi-driver/pkg/mounter"
 	mount "k8s.io/mount-utils"
 )
 

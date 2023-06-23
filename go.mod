@@ -1,4 +1,4 @@
-module github.com/sulakshm/csi-driver
+module github.com/portworx/windows-csi-driver
 
 go 1.19
 

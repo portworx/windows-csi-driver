@@ -29,7 +29,7 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/sulakshm/csi-driver/pkg/utils"
+	"github.com/portworx/windows-csi-driver/pkg/utils"
 
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
@@ -38,11 +38,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/sulakshm/csi-driver/pkg/mounter"
+	"github.com/portworx/windows-csi-driver/pkg/mounter"
 	"golang.org/x/net/context"
 	mount "k8s.io/mount-utils"
 
-	"github.com/sulakshm/csi-driver/pkg/common"
+	"github.com/portworx/windows-csi-driver/pkg/common"
 )
 
 func safeMounter(m mount.Interface) *mount.SafeFormatAndMount {

@@ -9,9 +9,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/sulakshm/csi-driver/pkg/common"
-	csicommon "github.com/sulakshm/csi-driver/pkg/csi-common"
-	pwx "github.com/sulakshm/csi-driver/pkg/portworx"
+	"github.com/portworx/windows-csi-driver/pkg/common"
+	csicommon "github.com/portworx/windows-csi-driver/pkg/csi-common"
+	pwx "github.com/portworx/windows-csi-driver/pkg/portworx"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/klog/v2"

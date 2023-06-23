@@ -20,7 +20,7 @@ limitations under the License.
 package mounter
 
 import (
-	"github.com/sulakshm/csi-driver/pkg/common"
+	"github.com/portworx/windows-csi-driver/pkg/common"
 	mount "k8s.io/mount-utils"
 	utilexec "k8s.io/utils/exec"
 )

@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/sulakshm/csi-driver/pkg/utils"
+	"github.com/portworx/windows-csi-driver/pkg/utils"
 
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
@@ -37,7 +37,7 @@ import (
 
 	"golang.org/x/net/context"
 
-	"github.com/sulakshm/csi-driver/pkg/common"
+	"github.com/portworx/windows-csi-driver/pkg/common"
 )
 
 // NodePublishVolume mount the volume from staging to target path
