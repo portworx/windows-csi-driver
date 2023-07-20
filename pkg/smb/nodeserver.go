@@ -26,7 +26,8 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/sulakshm/csi-driver/pkg/utils"
+	"github.com/portworx/windows-csi-driver/pkg/utils"
+	"github.com/portworx/sched-ops/k8s/core"
 
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
@@ -36,6 +37,8 @@ import (
 	"google.golang.org/grpc/status"
 
 	"golang.org/x/net/context"
+
+	"github.com/portworx/windows-csi-driver/pkg/common"
 )
 
 // NodePublishVolume mount the volume from staging to target path
@@ -61,6 +64,21 @@ func (d *smbDriver) NodePublishVolume(ctx context.Context, req *csi.NodePublishV
 	mountOptions := []string{"bind"}
 	if req.GetReadonly() {
 		mountOptions = append(mountOptions, "ro")
+	}
+	nodes, errnodes := core.Instance().GetNodes()
+        if errnodes == nil {
+		// For each node, get's it's annotations and labels
+		for _, n := range nodes.Items {
+			nodeLabels := make(map[string]string)
+			for k, v := range n.GetLabels() {
+				nodeLabels[k] = v
+			}
+
+			for k, v := range n.GetAnnotations() {
+				nodeLabels[k] = v
+			}
+			klog.V(2).Infof("NodePublishVolume: Kubenetest Node [%v] Labels[%v]", n.GetName(), nodeLabels)
+		}
 	}
 
 	mnt, err := d.ensureMountPoint(target)
@@ -124,7 +142,8 @@ func (d *smbDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolum
 		return nil, status.Error(codes.InvalidArgument, "Staging target not provided")
 	}
 
-	context := req.GetVolumeContext()
+	// context := req.GetVolumeContext()
+	context := req.GetPublishContext()
 	mountFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
 	volumeMountGroup := req.GetVolumeCapability().GetMount().GetVolumeMountGroup()
 	secrets := req.GetSecrets()
@@ -134,21 +153,21 @@ func (d *smbDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolum
 	subDirReplaceMap := map[string]string{}
 	for k, v := range context {
 		switch strings.ToLower(k) {
-		case sourceField:
+		case common.SharePathField:
 			source = v
-		case subDirField:
+		case common.SubDirField:
 			subDir = v
-		case pvcNamespaceKey:
-			subDirReplaceMap[pvcNamespaceMetadata] = v
-		case pvcNameKey:
-			subDirReplaceMap[pvcNameMetadata] = v
-		case pvNameKey:
-			subDirReplaceMap[pvNameMetadata] = v
+		case common.PvcNamespaceKey:
+			subDirReplaceMap[common.PvcNamespaceMetadata] = v
+		case common.PvcNameKey:
+			subDirReplaceMap[common.PvcNameMetadata] = v
+		case common.PvNameKey:
+			subDirReplaceMap[common.PvNameMetadata] = v
 		}
 	}
 
 	if source == "" {
-		return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("%s field is missing, current context: %v", sourceField, context))
+		return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("%s field is missing, current context: %v", common.SharePathField, context))
 	}
 
 	if acquired := d.volumeLocks.TryAcquire(volumeID); !acquired {
@@ -159,16 +178,16 @@ func (d *smbDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolum
 	var username, password, domain string
 	for k, v := range secrets {
 		switch strings.ToLower(k) {
-		case usernameField:
+		case common.UsernameField:
 			username = strings.TrimSpace(v)
-		case passwordField:
+		case common.PasswordField:
 			password = strings.TrimSpace(v)
-		case domainField:
+		case common.DomainField:
 			domain = strings.TrimSpace(v)
 		}
 	}
 
-	// in guest login, username and password options are not needed
+	// in guest login, common.UsernameField and password options are not needed
 	requireUsernamePwdOption := !hasGuestMountOptions(mountFlags)
 
 	var mountOptions, sensitiveMountOptions []string
@@ -188,14 +207,14 @@ func (d *smbDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolum
 			return nil, status.Error(codes.Internal, fmt.Sprintf("MkdirAll %s failed with error: %v", targetPath, err))
 		}
 		if requireUsernamePwdOption {
-			sensitiveMountOptions = []string{fmt.Sprintf("%s=%s,%s=%s", usernameField, username, passwordField, password)}
+			sensitiveMountOptions = []string{fmt.Sprintf("%s=%s,%s=%s", common.UsernameField, username, common.PasswordField, password)}
 		}
 		mountOptions = mountFlags
 		if !gidPresent && volumeMountGroup != "" {
 			mountOptions = append(mountOptions, fmt.Sprintf("gid=%s", volumeMountGroup))
 		}
 		if domain != "" {
-			mountOptions = append(mountOptions, fmt.Sprintf("%s=%s", domainField, domain))
+			mountOptions = append(mountOptions, fmt.Sprintf("%s=%s", common.DomainField, domain))
 		}
 	}
 
@@ -273,6 +292,7 @@ func (d *smbDriver) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCap
 func (d *smbDriver) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
 	return &csi.NodeGetInfoResponse{
 		NodeId: d.NodeID,
+		MaxVolumesPerNode: 100,
 	}, nil
 }
 

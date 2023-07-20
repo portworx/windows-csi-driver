@@ -9,9 +9,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/sulakshm/csi-driver/pkg/common"
-	csicommon "github.com/sulakshm/csi-driver/pkg/csi-common"
-	pwx "github.com/sulakshm/csi-driver/pkg/portworx"
+	"github.com/portworx/windows-csi-driver/pkg/common"
+	csicommon "github.com/portworx/windows-csi-driver/pkg/csi-common"
+	pwx "github.com/portworx/windows-csi-driver/pkg/portworx"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/klog/v2"
@@ -22,16 +22,17 @@ func init() {
 }
 
 var (
-	endpoint                      = flag.String("endpoint", "unix://tmp/csi.sock", "CSI endpoint")
-	nodeID                        = flag.String("nodeid", "", "node id")
-	driverName                    = flag.String("drivername", pwx.DefaultDriverName, "name of the driver")
-	ver                           = flag.Bool("ver", false, "Print the version and exit.")
+	endpoint   = flag.String("endpoint", "unix://tmp/csi.sock", "CSI endpoint")
+	nodeID     = flag.String("nodeid", "", "node id")
+	driverName = flag.String("drivername", common.DefaultDriverName, "name of the driver")
+	ver        = flag.Bool("ver", false, "Print the version and exit.")
+	mode       = flag.String("mode", "nfs", "operational mode, one of nfs/iscsi/smb. default nfs")
+	persist    = flag.Bool("persist", false, "nfs specific map persist volume to Z drive")
+	/// confirm if below is used
+	workingMountDir = flag.String("working-mount-dir", "/tmp", "working directory for provisioner to mount smb shares temporarily")
+	// for volume stats
 	metricsAddress                = flag.String("metrics-address", "0.0.0.0:29644", "export the metrics")
-	kubeconfig                    = flag.String("kubeconfig", "", "Absolute path to the kubeconfig file. Required only when running out of cluster.")
-	enableGetVolumeStats          = flag.Bool("enable-get-volume-stats", true, "allow GET_VOLUME_STATS on agent node")
-	removeSMBMappingDuringUnmount = flag.Bool("remove-smb-mapping-during-unmount", true, "remove SMBMapping during unmount on Windows node")
-	workingMountDir               = flag.String("working-mount-dir", "/tmp", "working directory for provisioner to mount smb shares temporarily")
-	mode                          = flag.String("mode", "iscsi", "operational mode, one of iscsi/smb. default iscsi")
+	removeSMBMappingDuringUnmount = flag.Bool("removeSMBMappingDuringUnmount", true, "smb specific remove mappings during unmount")
 )
 
 func main() {
@@ -59,7 +60,7 @@ func main() {
 	os.Exit(0)
 }
 
-func handle(modeVal common.DriverMode) {
+func handle(modeVal common.DriverModeFlag) {
 	versionMeta, err := pwx.GetVersionYAML(*driverName)
 	if err != nil {
 		klog.Fatalf("%v", err)
@@ -68,15 +69,16 @@ func handle(modeVal common.DriverMode) {
 		modeVal, versionMeta)
 
 	driverOptions := common.DriverOptions{
-		NodeID:               *nodeID,
-		DriverName:           *driverName,
-		Mode:                 modeVal,
-		EnableGetVolumeStats: *enableGetVolumeStats,
+		NodeID:     *nodeID,
+		DriverName: *driverName,
+		Mode:       modeVal,
+		// EnableGetVolumeStats: *enableGetVolumeStats,
+		WorkDir: *workingMountDir,
+                Endpoint: *endpoint,
 	}
 	driverOptions.SmbOpts.RemoveSMBMappingDuringUnmount = *removeSMBMappingDuringUnmount
-	driverOptions.SmbOpts.WorkingMountDir = *workingMountDir
 
-	driverOptions.IscsiOpts.Endpoint = *endpoint
+	driverOptions.NfsOpts.Persist = *persist
 
 	driver := pwx.NewDriver(*driverName, pwx.DriverVersion(), &driverOptions)
 

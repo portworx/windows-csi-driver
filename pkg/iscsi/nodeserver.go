@@ -42,6 +42,7 @@ func (ns *iscsiDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 func (ns *iscsiDriver) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
 	return &csi.NodeGetInfoResponse{
 		NodeId: ns.NodeID,
+		MaxVolumesPerNode: 100,
 	}, nil
 }
 

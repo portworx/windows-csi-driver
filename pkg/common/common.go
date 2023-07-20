@@ -7,55 +7,66 @@ import (
 
 // common types and definitions for all driver types
 
-type DriverMode uint
+type DriverModeFlag uint
 
 const (
-	DriverModeInvalid = DriverMode(0)
-	DriverModeSmb     = DriverMode(1)
-	DriverModeIscsi   = DriverMode(2)
+	DriverModeFlagInvalid = DriverModeFlag(0)
+	DriverModeFlagSmb     = DriverModeFlag(1)
+	DriverModeFlagIscsi   = DriverModeFlag(2)
+	DriverModeFlagNfs     = DriverModeFlag(3)
 )
 
-func (m DriverMode) String() string {
+func (m DriverModeFlag) String() string {
 	switch m {
-	case DriverModeSmb:
+	case DriverModeFlagSmb:
 		return "smb"
-	case DriverModeIscsi:
+	case DriverModeFlagNfs:
+		return "nfs"
+	case DriverModeFlagIscsi:
 		return "iscsi"
 	default:
 		return "invalid"
 	}
 }
 
-func ParseDriverMode(mode string) (DriverMode, error) {
+func ParseDriverMode(mode string) (DriverModeFlag, error) {
 	switch mode {
 	case "iscsi":
-		return DriverModeIscsi, nil
+		return DriverModeFlagIscsi, nil
 	case "smb":
-		return DriverModeSmb, nil
+		return DriverModeFlagSmb, nil
+	case "nfs":
+		return DriverModeFlagNfs, nil
 	default:
-		return DriverModeInvalid, fmt.Errorf("invalid mode %s", mode)
+		return DriverModeFlagInvalid, fmt.Errorf("invalid mode %s", mode)
 	}
 }
 
 type SmbDriverOptions struct {
 	// this only applies to Windows node
 	RemoveSMBMappingDuringUnmount bool
-	WorkingMountDir               string
 }
 
 type IscsiDriverOptions struct {
-	Endpoint string
+}
+
+type NfsDriverOptions struct {
+	Persist bool
 }
 
 // DriverOptions defines driver parameters specified in driver deployment
 type DriverOptions struct {
-	NodeID               string
-	DriverName           string
-	Mode                 DriverMode
-	EnableGetVolumeStats bool
+	NodeID     string
+	DriverName string
+	Mode       DriverModeFlag
+	Endpoint   string // csi end point
+	WorkDir    string // top level work directory
+
+	EnableGetVolumeStats bool // use metrics server endpoint
 
 	SmbOpts   SmbDriverOptions
 	IscsiOpts IscsiDriverOptions
+	NfsOpts   NfsDriverOptions
 }
 
 type BaseDriver interface {
@@ -67,7 +78,7 @@ type BaseDriver interface {
 	GetVolumeCapabilityAccessModes() []*csi.VolumeCapability_AccessMode
 
 	Init()
-	GetMode() DriverMode
+	GetMode() DriverModeFlag
 
 	GetControllerServer() csi.ControllerServer
 	GetIdentityServer() csi.IdentityServer

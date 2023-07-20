@@ -27,6 +27,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog/v2"
+
+	"github.com/portworx/windows-csi-driver/pkg/common"
 )
 
 const (
@@ -110,7 +112,7 @@ func (d *smbDriver) CreateVolume(ctx context.Context, req *csi.CreateVolumeReque
 		if err = os.Mkdir(internalVolumePath, 0777); err != nil && !os.IsExist(err) {
 			return nil, status.Errorf(codes.Internal, "failed to make subdirectory: %v", err.Error())
 		}
-		setKeyValueInMap(parameters, subDirField, smbVol.subDir)
+		setKeyValueInMap(parameters, common.SubDirField, smbVol.subDir)
 	} else {
 		klog.V(2).Infof("CreateVolume(%s) does not create subdirectory", name)
 	}
@@ -256,7 +258,7 @@ func (d *smbDriver) internalMount(ctx context.Context, vol *smbVolume, volCap *c
 	_, err := d.NodeStageVolume(ctx, &csi.NodeStageVolumeRequest{
 		StagingTargetPath: stagingPath,
 		VolumeContext: map[string]string{
-			sourceField: vol.source,
+			common.SharePathField: vol.source,
 		},
 		VolumeCapability: volCap,
 		VolumeId:         vol.id,
@@ -307,23 +309,23 @@ func newSMBVolume(name string, size int64, params map[string]string) (*smbVolume
 	// validate parameters (case-insensitive).
 	for k, v := range params {
 		switch strings.ToLower(k) {
-		case sourceField:
+		case common.SharePathField:
 			source = v
-		case subDirField:
+		case common.SubDirField:
 			subDir = v
-		case pvcNamespaceKey:
-			subDirReplaceMap[pvcNamespaceMetadata] = v
-		case pvcNameKey:
-			subDirReplaceMap[pvcNameMetadata] = v
-		case pvNameKey:
-			subDirReplaceMap[pvNameMetadata] = v
+		case common.PvcNamespaceKey:
+			subDirReplaceMap[common.PvcNamespaceMetadata] = v
+		case common.PvcNameKey:
+			subDirReplaceMap[common.PvcNameMetadata] = v
+		case common.PvNameKey:
+			subDirReplaceMap[common.PvNameMetadata] = v
 		default:
 			return nil, fmt.Errorf("invalid parameter %s in storage class", k)
 		}
 	}
 
 	if source == "" {
-		return nil, fmt.Errorf("%v is a required parameter", sourceField)
+		return nil, fmt.Errorf("%v is a required parameter", common.SharePathField)
 	}
 
 	vol := &smbVolume{

@@ -5,10 +5,10 @@ package iscsi
 
 import (
 	"fmt"
-	"strings"
 	"strconv"
+	"strings"
 
-	"github.com/sulakshm/csi-driver/pkg/mounter"
+	"github.com/portworx/windows-csi-driver/pkg/mounter"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"golang.org/x/net/context"
@@ -245,25 +245,25 @@ func (ns *iscsiDriver) iscsiNodeUnstageVolume(ctx context.Context, req *csi.Node
 
 	m := csiMounter(ns.mounter)
 
-/*
-	paths, err := m.IscsiGetVolumeMounts(req.GetVolumeId(), false)
-	if err != nil {
-		return nil, err
-	}
-
-	targetPath := req.GetStagingTargetPath()
-	found := false
-	for _, p := range paths {
-		if p == targetPath {
-			found = true
-			break
+	/*
+		paths, err := m.IscsiGetVolumeMounts(req.GetVolumeId(), false)
+		if err != nil {
+			return nil, err
 		}
-	}
 
-	if !found {
-		return &csi.NodeUnstageVolumeResponse{}, nil
-	}
-*/
+		targetPath := req.GetStagingTargetPath()
+		found := false
+		for _, p := range paths {
+			if p == targetPath {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return &csi.NodeUnstageVolumeResponse{}, nil
+		}
+	*/
 
 	// dont fail this call, do as much cleanup as possible, report failures as logs
 	coe := true
@@ -326,16 +326,16 @@ func (ns *iscsiDriver) iscsiNodeUnpublishVolume(ctx context.Context, req *csi.No
 	m := csiMounter(ns.mounter)
 
 	targetPath := req.GetTargetPath()
-/*
-	--- Do not fail call if volume does not exist!
-	paths, err := m.IscsiGetVolumeMounts(req.GetVolumeId(), false)
-	if err != nil {
-		return nil, err
-	}
+	/*
+		--- Do not fail call if volume does not exist!
+		paths, err := m.IscsiGetVolumeMounts(req.GetVolumeId(), false)
+		if err != nil {
+			return nil, err
+		}
 
-	for _, p := range paths {
-		if p == targetPath {
-*/
+		for _, p := range paths {
+			if p == targetPath {
+	*/
 	{
 		{
 			err := m.IscsiVolumeUnmount(req.GetVolumeId(), targetPath)
