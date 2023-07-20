@@ -22,7 +22,7 @@ package mounter
 import (
 	mount "k8s.io/mount-utils"
 	utilexec "k8s.io/utils/exec"
-	"github.com/sulakshm/csi-driver/pkg/common"
+	"github.com/portworx/windows-csi-driver/pkg/common"
 )
 
 func NewSafeMounter(mode common.DriverMode, removeSMBMappingDuringUnmount bool) (*mount.SafeFormatAndMount, error) {

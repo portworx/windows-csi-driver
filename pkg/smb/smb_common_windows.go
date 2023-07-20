@@ -23,12 +23,13 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/sulakshm/csi-driver/pkg/mounter"
+	"github.com/portworx/windows-csi-driver/pkg/mounter"
 	"k8s.io/klog/v2"
 	mount "k8s.io/mount-utils"
 )
 
 func Mount(m *mount.SafeFormatAndMount, source, target, fsType string, mountOptions, sensitiveMountOptions []string) error {
+	klog.V(4).Infof("Mount source: %s target: %s",source, target)
 	if proxy, ok := m.Interface.(mounter.CSIProxyMounter); ok {
 		return proxy.SMBMount(source, target, fsType, mountOptions, sensitiveMountOptions)
 	}
@@ -36,6 +37,7 @@ func Mount(m *mount.SafeFormatAndMount, source, target, fsType string, mountOpti
 }
 
 func Unmount(m *mount.SafeFormatAndMount, target string) error {
+	klog.V(4).Infof("UnMount target: %s", target)
 	if proxy, ok := m.Interface.(mounter.CSIProxyMounter); ok {
 		return proxy.SMBUnmount(target)
 	}
@@ -43,6 +45,7 @@ func Unmount(m *mount.SafeFormatAndMount, target string) error {
 }
 
 func RemoveStageTarget(m *mount.SafeFormatAndMount, target string) error {
+	klog.V(4).Infof("RemoveStageTarget target: %s", target)
 	if proxy, ok := m.Interface.(mounter.CSIProxyMounter); ok {
 		return proxy.Rmdir(target)
 	}
@@ -53,10 +56,12 @@ func RemoveStageTarget(m *mount.SafeFormatAndMount, target string) error {
 // The clean up mount point point calls is supposed for fix the corrupted directories as well.
 // For alpha CSI proxy integration, we only do an unmount.
 func CleanupSMBMountPoint(m *mount.SafeFormatAndMount, target string, extensiveMountCheck bool) error {
+	klog.V(4).Infof("CleanupSMBMountPoint target: %s", target)
 	return Unmount(m, target)
 }
 
 func CleanupMountPoint(m *mount.SafeFormatAndMount, target string, extensiveMountCheck bool) error {
+	klog.V(4).Infof("CleanupMountPoint target: %s", target)
 	if proxy, ok := m.Interface.(mounter.CSIProxyMounter); ok {
 		return proxy.Rmdir(target)
 	}
