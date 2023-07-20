@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/wait"
+	"github.com/portworx/sched-ops/k8s/core"
 
 	iscsi "github.com/kubernetes-csi/csi-proxy/client/api/iscsi/v1alpha2"
 	smb "github.com/kubernetes-csi/csi-proxy/client/api/smb/v1"
@@ -796,6 +797,22 @@ func (mounter *csiProxyMounter) Mount(source string, target string, fstype strin
 	}
 
 	klog.V(4).Infof("Mount: old name: %s. new name: %s is Successful", source, target)
+
+	nodes, errnodes := core.Instance().GetNodes()
+        if errnodes == nil {
+		// For each node, get's it's annotations and labels
+		for _, n := range nodes.Items {
+			nodeLabels := make(map[string]string)
+			for k, v := range n.GetLabels() {
+				nodeLabels[k] = v
+			}
+
+			for k, v := range n.GetAnnotations() {
+				nodeLabels[k] = v
+			}
+			klog.V(2).Infof("NodePublishVolume: Kubenetest Node [%v] Labels[%v]", n.GetName(), nodeLabels)
+		}
+	}
 	return err
 }
 

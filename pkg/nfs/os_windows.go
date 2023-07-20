@@ -21,6 +21,7 @@ package nfs
 
 import (
 	"fmt"
+	//orgcontext "context"
 	"io/ioutil"
 	"os"
 	_ "path/filepath"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/portworx/windows-csi-driver/pkg/utils"
+	"github.com/libopenstorage/openstorage/api"
 
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
@@ -38,11 +40,15 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/portworx/sched-ops/k8s/core"
+	corev1 "k8s.io/api/core/v1"
 	"github.com/portworx/windows-csi-driver/pkg/mounter"
 	"golang.org/x/net/context"
 	mount "k8s.io/mount-utils"
 
 	"github.com/portworx/windows-csi-driver/pkg/common"
+	"google.golang.org/grpc"
+	//"google.golang.org/grpc/metadata"
 )
 
 func safeMounter(m mount.Interface) *mount.SafeFormatAndMount {
@@ -153,7 +159,128 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	if len(targetPath) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "Staging target not provided")
 	}
+	var (
+		exportpath string
+		source string
+		ip string
+		mountOptions []string
+		sensitiveMountOptions []string
+		ipfound bool
+		endpoint string
+		csimode string
+	)
 
+	// Pick a linux node. For now pick the first node.
+	nodes, errnodes := core.Instance().GetNodes()
+        if errnodes != nil {
+		klog.V(2).Infof("Phani: Getting Node information failed error[%v]", errnodes)
+	} else {
+		// For each node, get's it's annotations and labels
+		for _, n := range nodes.Items {
+			nodeLabels := make(map[string]string)
+			for k, v := range n.GetLabels() {
+				nodeLabels[k] = v
+			}
+
+			for k, v := range n.GetAnnotations() {
+				nodeLabels[k] = v
+			}
+			klog.V(2).Infof("NodePublishVolume: Kubenetest Node [%v] Labels[%v]", n.GetName(), nodeLabels)
+			v, ok := nodeLabels["beta.kubernetes.io/os"]
+			if ok && v == "linux" {
+				csi, ok := nodeLabels["csi.volume.kubernetes.io/nodeid"]
+				if ok && strings.Contains(csi, "pxd.portworx.com") {
+					if !ipfound {
+						for _, addr := range n.Status.Addresses {
+							switch addr.Type {
+							case corev1.NodeInternalIP:
+								ip = addr.Address
+								ipfound = true
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// For Windows share volume:
+	// On the linux node : Attach + Mount.
+	// Inspect the volume.
+	// handcraft export path /var/lib/osd/pxns/<volumeID>
+	// mount \\<attachedon>\exportpath.
+
+	useGrpc := true
+	if ipfound {
+		if useGrpc {
+			host := fmt.Sprintf("%s:%s", ip, "17017")
+			klog.V(2).Infof("NodeStageVolume: host[%v]", host)
+			conn, err := grpc.Dial(host, grpc.WithInsecure())
+			if err != nil {
+				klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ip, volumeID, err)
+				return nil, err
+			}
+
+			mountUnmountClient := api.NewOpenStorageMountAttachClient(conn)
+			klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Issuing Attach Grpc", ip, volumeID)
+			_, err = mountUnmountClient.Attach(ctx, &api.SdkVolumeAttachRequest{VolumeId: volumeID})
+			klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Attach returned [%v]", ip, volumeID, err)
+			klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Issuing Mount Grpc", ip, volumeID)
+			_, err = mountUnmountClient.Mount(ctx, &api.SdkVolumeMountRequest{MountPath: "/dummy", VolumeId: volumeID})
+			klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Mount returned [%v]", ip, volumeID, err)
+			volumeClient := api.NewOpenStorageVolumeClient(conn)
+			volInfo, err := volumeClient.Inspect(ctx, &api.SdkVolumeInspectRequest{VolumeId: volumeID})
+			klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Inspect returned [%v] volInfo[%v]", ip, volumeID, err, volInfo)
+			endpoint = volInfo.GetVolume().GetAttachedOn()
+			exportpath = fmt.Sprintf("/var/lib/osd/pxns/%s", volumeID)
+		} else {
+			klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]", ip, volumeID)
+			cmdLine := fmt.Sprintf(
+				`Invoke-RestMethod -Uri "http://%s:17018/v1/mountattach/attach " ` +
+				`-Method Post -ContentType "application/json" -Body "{` + "`"  +
+				`"volume_id` + "`" + `":` + "`" + `"%s`+"`"+`"}"`, ip, volumeID)
+			out1, out2, err := mounter.RunPowershellCmd(cmdLine)
+			outString := string(out2[:])
+			outString2 := string(out1[:])
+			klog.V(2).Infof("NodeStageVolume: Attach CLI[%v] Error[%v] Out1[%v] Out2[%v]", cmdLine, err, outString2, outString)
+			cmdLine = fmt.Sprintf(
+					`Invoke-RestMethod -Uri "http://%s:17018/v1/mountattach/mount "` +
+			`-Method Post -ContentType "application/json" -Body "{` +
+				"`" + `"mount_path` + "`"+`":` + "`" + `"/dummy` + "`" + `", `+ "`" + `"volume_id` + "`" + `":` +
+					"`" + `"%s` + "`" + `"}"`,ip, volumeID)
+			out1, out2, err = mounter.RunPowershellCmd(cmdLine)
+			outString = string(out2[:])
+			outString2 = string(out1[:])
+			klog.V(2).Infof("NodeStageVolume: Mount CLI[%v] Error[%v] Out1[%v] Out2[%v]", cmdLine, err, outString2, outString)
+			cmdLine = fmt.Sprintf(
+				`$res = Invoke-RestMethod -Uri "http://%s:17018/v1/volumes/inspect/%s"; echo $res.volume.attached_on`, ip, volumeID)
+			out1, out2, err = mounter.RunPowershellCmd(cmdLine, fmt.Sprintf("ip_address=%s", ip), fmt.Sprintf("volume_id=%s",volumeID))
+			outString = string(out2[:])
+			outString2 = string(out1[:])
+			outString2 = strings.TrimSuffix(outString2, "\r\n")
+			klog.V(2).Infof("NodeStageVolume: Inspect CLI[%v], volumeInfo[%v] Error[%v] out1[%v]", cmdLine, outString2, err, outString)
+			endpoint = outString2
+			exportpath = fmt.Sprintf("/var/lib/osd/pxns/%s", volumeID)
+		}
+	} else {
+		context := req.GetPublishContext()
+		_, ok := context[common.CsimodeField]
+		if !ok {
+			return nil, status.Error(codes.InvalidArgument, "csimode not specified in context")
+		}
+		endpoint, ok = context[common.EndpointField]
+		if !ok {
+			return nil, status.Error(codes.InvalidArgument, "nfs endpoint not specified in context")
+		}
+		exportpath, ok = context[common.ExportpathField]
+		if !ok {
+			return nil, status.Error(codes.InvalidArgument, "nfs export path not specified in context")
+		}
+	}
+
+
+	/*
 	context := req.GetPublishContext()
 	csimode, ok := context[common.CsimodeField]
 	if !ok {
@@ -165,15 +292,12 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	if !ok {
 		return nil, status.Error(codes.InvalidArgument, "nfs endpoint not specified in context")
 	}
-	var (
-		exportpath string
-		source string
-		mountOptions []string
-		sensitiveMountOptions []string
-	)
+	*/
+	csimode = "nfs"
 
 	if csimode == "smb" {
-		exportpath, ok = context[common.SharePathField]
+		context := req.GetPublishContext()
+		exportpath, ok := context[common.SharePathField]
 		if !ok {
 			return nil, status.Error(codes.InvalidArgument, "smb export path not specified in context")
 		}
@@ -190,10 +314,12 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 		mountOptions = []string{username, volumeID}
 		sensitiveMountOptions = []string{password}
 	} else if csimode == "nfs" {
+		/*
 		exportpath, ok= context[common.ExportpathField]
 		if !ok {
 			return nil, status.Error(codes.InvalidArgument, "nfs export path not specified in context")
 		}
+		*/
 		source = fmt.Sprintf("\\\\%s\\%s", endpoint, exportpath)
 	} else {
 		return nil, fmt.Errorf("csimode %s not a valid mode", csimode)
@@ -418,4 +544,18 @@ func replaceWithMap(str string, m map[string]string) string {
 		}
 	}
 	return str
+}
+
+func newContext() context.Context {
+	return setContextWithToken(context.Background())
+}
+
+func setContextWithToken(ctx context.Context) context.Context {
+	//if contextconfig.CurrentContext == nil {
+		return ctx
+	//}
+	//md := metadata.New(map[string]string{
+		//"authorization": "bearer " + contextconfig.CurrentContext.Token,
+	//})
+	//return metadata.NewOutgoingContext(ctx, md)
 }

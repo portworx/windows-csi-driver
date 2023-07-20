@@ -27,6 +27,7 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/portworx/windows-csi-driver/pkg/utils"
+	"github.com/portworx/sched-ops/k8s/core"
 
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
@@ -63,6 +64,21 @@ func (d *smbDriver) NodePublishVolume(ctx context.Context, req *csi.NodePublishV
 	mountOptions := []string{"bind"}
 	if req.GetReadonly() {
 		mountOptions = append(mountOptions, "ro")
+	}
+	nodes, errnodes := core.Instance().GetNodes()
+        if errnodes == nil {
+		// For each node, get's it's annotations and labels
+		for _, n := range nodes.Items {
+			nodeLabels := make(map[string]string)
+			for k, v := range n.GetLabels() {
+				nodeLabels[k] = v
+			}
+
+			for k, v := range n.GetAnnotations() {
+				nodeLabels[k] = v
+			}
+			klog.V(2).Infof("NodePublishVolume: Kubenetest Node [%v] Labels[%v]", n.GetName(), nodeLabels)
+		}
 	}
 
 	mnt, err := d.ensureMountPoint(target)
