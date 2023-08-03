@@ -35,8 +35,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"golang.org/x/net/context"
 	"github.com/portworx/windows-csi-driver/pkg/common"
+	"golang.org/x/net/context"
 )
 
 // NodePublishVolume mount the volume from staging to target path

@@ -18,6 +18,7 @@ package nfs
 
 import (
 	"fmt"
+	"net"
 	//orgcontext "context"
 	"io/ioutil"
 	"os"
@@ -27,9 +28,10 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/portworx/windows-csi-driver/pkg/utils"
 	"github.com/libopenstorage/openstorage/api"
+	"github.com/portworx/windows-csi-driver/pkg/utils"
 
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
 	_ "k8s.io/kubernetes/pkg/volume"
@@ -38,9 +40,9 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/portworx/sched-ops/k8s/core"
-	corev1 "k8s.io/api/core/v1"
 	"github.com/portworx/windows-csi-driver/pkg/mounter"
 	"golang.org/x/net/context"
+	corev1 "k8s.io/api/core/v1"
 	mount "k8s.io/mount-utils"
 
 	"github.com/portworx/windows-csi-driver/pkg/common"
@@ -140,6 +142,37 @@ func (d *nfsDriver) nfsNodeUnpublishVolume(ctx context.Context, req *csi.NodeUnp
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
+// getLocalIPList returns the list of local IP addresses, and optionally includes local hostname.
+func getLocalIPList() (string, error) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", err
+	}
+	for _, i := range ifaces {
+		addrs, err := i.Addrs()
+		if err != nil {
+			//                logrus.WithError(err).Warnf("Error listing address for %s (cont.)", i.Name)
+			klog.V(2).Infof("Error listing address for %s (cont.)", i.Name)
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+			// process IP address
+			if ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() {
+				klog.V(2).Infof("MyIP=%s", ip.String())
+				return ip.String(), nil
+			}
+		}
+	}
+	return "", status.Error(codes.InvalidArgument, "failed to get localip")
+}
+
 // NodeStageVolume mount the volume to a staging path
 func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
@@ -156,20 +189,46 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	if len(targetPath) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "Staging target not provided")
 	}
+	myip, err := getLocalIPList()
 	var (
-		exportpath string
-		source string
-		ip string
-		mountOptions []string
+		exportpath            string
+		source                string
+		ip                    string
+		mountOptions          []string
 		sensitiveMountOptions []string
-		ipfound bool
-		endpoint string
-		csimode string
+		ipfound               bool
+		endpoint              string
+		csimode               string
 	)
+
+	svc, err := core.Instance().GetService("portworx-service", "kube-system")
+	if err != nil {
+		klog.V(2).Infof("Failed to get Portworx Service, error[%v]", err)
+		return nil, err
+	}
+
+	var restPort, gRpcPort string
+	for _, svcPort := range svc.Spec.Ports {
+		if svcPort.Name == "px-sdk" {
+			targetPort := svcPort.TargetPort
+			if targetPort.Type == intstr.String {
+				gRpcPort = targetPort.StrVal
+			} else {
+				gRpcPort = fmt.Sprintf("%d", targetPort.IntValue())
+			}
+		} else if svcPort.Name == "px-rest" {
+			targetPort := svcPort.TargetPort
+			if targetPort.Type == intstr.String {
+				restPort = targetPort.StrVal
+			} else {
+				restPort = fmt.Sprintf("%d", targetPort.IntValue())
+			}
+		}
+	}
 
 	// Pick a linux node. For now pick the first node.
 	nodes, errnodes := core.Instance().GetNodes()
-        if errnodes != nil {
+	if errnodes != nil {
 		klog.V(2).Infof("Phani: Getting Node information failed error[%v]", errnodes)
 	} else {
 		// For each node, get's it's annotations and labels
@@ -209,11 +268,14 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	// mount \\<attachedon>\exportpath.
 
 	useGrpc := true
-	var portNum string
 	if ipfound {
+		driverOpts := make(map[string]string)
+		driverOpts["WindowsClient"] = "true"
+		if myip != "" {
+			driverOpts["CallingNodeIP"] = myip
+		}
 		if useGrpc {
-			portNum = "17017"
-			host := fmt.Sprintf("%s:%s", ip, portNum)
+			host := fmt.Sprintf("%s:%s", ip, gRpcPort)
 			klog.V(2).Infof("NodeStageVolume: host[%v]", host)
 			conn, err := grpc.Dial(host, grpc.WithInsecure())
 			if err != nil {
@@ -226,7 +288,7 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 			_, err = mountUnmountClient.Attach(ctx, &api.SdkVolumeAttachRequest{VolumeId: volumeID})
 			klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Attach returned [%v]", ip, volumeID, err)
 			klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Issuing Mount Grpc", ip, volumeID)
-			_, err = mountUnmountClient.Mount(ctx, &api.SdkVolumeMountRequest{MountPath: "/dummy", VolumeId: volumeID})
+			_, err = mountUnmountClient.Mount(ctx, &api.SdkVolumeMountRequest{MountPath: "/dummy", VolumeId: volumeID, DriverOptions: driverOpts})
 			klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Mount returned [%v]", ip, volumeID, err)
 			volumeClient := api.NewOpenStorageVolumeClient(conn)
 			volInfo, err := volumeClient.Inspect(ctx, &api.SdkVolumeInspectRequest{VolumeId: volumeID})
@@ -234,28 +296,27 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 			endpoint = volInfo.GetVolume().GetAttachedOn()
 			exportpath = fmt.Sprintf("/var/lib/osd/pxns/%s", volumeID)
 		} else {
-			portNum = "17018"
 			klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]", ip, volumeID)
 			cmdLine := fmt.Sprintf(
-				`Invoke-RestMethod -Uri "http://%s:%s/v1/mountattach/attach " ` +
-				`-Method Post -ContentType "application/json" -Body "{` + "`"  +
-				`"volume_id` + "`" + `":` + "`" + `"%s`+"`"+`"}"`, ip, portNum, volumeID)
+				`Invoke-RestMethod -Uri "http://%s:%s/v1/mountattach/attach " `+
+					`-Method Post -ContentType "application/json" -Body "{`+"`"+
+					`"volume_id`+"`"+`":`+"`"+`"%s`+"`"+`"}"`, ip, restPort, volumeID)
 			out1, out2, err := mounter.RunPowershellCmd(cmdLine)
 			outString := string(out2[:])
 			outString2 := string(out1[:])
 			klog.V(2).Infof("NodeStageVolume: Attach CLI[%v] Error[%v] Out1[%v] Out2[%v]", cmdLine, err, outString2, outString)
 			cmdLine = fmt.Sprintf(
-					`Invoke-RestMethod -Uri "http://%s:%s/v1/mountattach/mount "` +
-			`-Method Post -ContentType "application/json" -Body "{` +
-				"`" + `"mount_path` + "`"+`":` + "`" + `"/dummy` + "`" + `", `+ "`" + `"volume_id` + "`" + `":` +
-					"`" + `"%s` + "`" + `"}"`,ip, portNum, volumeID)
+				`Invoke-RestMethod -Uri "http://%s:%s/v1/mountattach/mount "`+
+					`-Method Post -ContentType "application/json" -Body "{`+
+					"`"+`"mount_path`+"`"+`":`+"`"+`"/dummy`+"`"+`", `+"`"+`"volume_id`+"`"+`":`+
+					"`"+`"%s`+"`"+`"}"`, ip, restPort, volumeID)
 			out1, out2, err = mounter.RunPowershellCmd(cmdLine)
 			outString = string(out2[:])
 			outString2 = string(out1[:])
 			klog.V(2).Infof("NodeStageVolume: Mount CLI[%v] Error[%v] Out1[%v] Out2[%v]", cmdLine, err, outString2, outString)
 			cmdLine = fmt.Sprintf(
-				`$res = Invoke-RestMethod -Uri "http://%s:%s/v1/volumes/inspect/%s"; echo $res.volume.attached_on`, ip, portNum, volumeID)
-			out1, out2, err = mounter.RunPowershellCmd(cmdLine, fmt.Sprintf("ip_address=%s", ip), fmt.Sprintf("volume_id=%s",volumeID))
+				`$res = Invoke-RestMethod -Uri "http://%s:%s/v1/volumes/inspect/%s"; echo $res.volume.attached_on`, ip, restPort, volumeID)
+			out1, out2, err = mounter.RunPowershellCmd(cmdLine, fmt.Sprintf("ip_address=%s", ip), fmt.Sprintf("volume_id=%s", volumeID))
 			outString = string(out2[:])
 			outString2 = string(out1[:])
 			outString2 = strings.TrimSuffix(outString2, "\r\n")
@@ -510,11 +571,10 @@ func newContext() context.Context {
 
 func setContextWithToken(ctx context.Context) context.Context {
 	//if contextconfig.CurrentContext == nil {
-		return ctx
+	return ctx
 	//}
 	//md := metadata.New(map[string]string{
-		//"authorization": "bearer " + contextconfig.CurrentContext.Token,
+	//"authorization": "bearer " + contextconfig.CurrentContext.Token,
 	//})
 	//return metadata.NewOutgoingContext(ctx, md)
 }
-

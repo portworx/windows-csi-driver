@@ -38,7 +38,7 @@ func (ns *nfsDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolu
 
 func (ns *nfsDriver) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
 	return &csi.NodeGetInfoResponse{
-		NodeId: ns.NodeID,
+		NodeId:            ns.NodeID,
 		MaxVolumesPerNode: 100,
 	}, nil
 }

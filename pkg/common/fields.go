@@ -3,8 +3,8 @@ package common
 const (
 	DefaultDriverName = "pxd.portworx.com"
 
-	UsernameField     = "usernameField"
-	PasswordField     = "passwordField"
+	UsernameField = "usernameField"
+	PasswordField = "passwordField"
 	// SourceField       = "source"
 	SubDirField       = "subdir"
 	DomainField       = "domain"
@@ -28,5 +28,5 @@ const (
 	SharePathField   = "sharePathKey"   // remote share path
 	EndpointField    = "endpointKey"    // remote endpoint
 	SvcEndpointField = "svcEndpointKey" // remote service endpoint
-	ExportpathField = "exportPathKey" //export point for nfs
+	ExportpathField  = "exportPathKey"  //export point for nfs
 )

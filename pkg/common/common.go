@@ -36,7 +36,7 @@ func ParseDriverMode(mode string) (DriverModeFlag, error) {
 	case "smb":
 		return DriverModeFlagSmb, nil
 	case "nfs":
-		return DriverModeFlagIscsi, nil
+		return DriverModeFlagNfs, nil
 	default:
 		return DriverModeFlagInvalid, fmt.Errorf("invalid mode %s", mode)
 	}

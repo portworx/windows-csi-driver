@@ -28,7 +28,7 @@ type NfsMounter interface {
 	NfsUnmount(volumeId string, target string) error
 	AddDrive(volid string, sharePath string, sensitiveMountOptins []string, csimode string) error
 	RmDrive(volid string) error
-	DriveInfo(volid string)(*DriveInfoObj, bool, error)
+	DriveInfo(volid string) (*DriveInfoObj, bool, error)
 	DriveExists(volid string) (bool, error)
 	MkLink(volid, target string) error
 	RmLink(volid, target string) error

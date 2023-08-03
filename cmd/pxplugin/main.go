@@ -4,16 +4,20 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
 	"strings"
 
+	"github.com/portworx/sched-ops/k8s/core"
 	"github.com/portworx/windows-csi-driver/pkg/common"
 	csicommon "github.com/portworx/windows-csi-driver/pkg/csi-common"
 	pwx "github.com/portworx/windows-csi-driver/pkg/portworx"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/klog/v2"
 )
 
@@ -35,6 +39,7 @@ var (
 )
 
 func main() {
+
 	flag.Parse()
 	if *ver {
 		info, err := pwx.GetVersionYAML(*driverName)
@@ -48,6 +53,10 @@ func main() {
 		// nodeid is not needed in controller component
 		klog.Warning("nodeid is empty")
 	}
+	var debug = false
+	if debug {
+		displayClusterInformation()
+	}
 
 	modeval, err := common.ParseDriverMode(*mode)
 	if err != nil {
@@ -59,20 +68,111 @@ func main() {
 	os.Exit(0)
 }
 
+func displayClusterInformation() {
+	klog.V(2).Infof("Logging Cluster Information")
+
+	var gRpcPort string
+	svc, err := core.Instance().GetService("portworx-service", "kube-system")
+	if err != nil {
+		klog.V(2).Infof("Failed to get portworx service, err [%v]", err)
+		gRpcPort = "0"
+	} else {
+		for _, svcPort := range svc.Spec.Ports {
+			if svcPort.Name == "px-sdk" {
+				targetPort := svcPort.TargetPort
+				if targetPort.Type == intstr.String {
+					gRpcPort = targetPort.StrVal
+				} else {
+					gRpcPort = fmt.Sprintf("%d", targetPort.IntValue())
+				}
+			}
+		}
+	}
+
+	nodes, errnodes := core.Instance().GetNodes()
+	if errnodes != nil {
+		klog.V(2).Infof("Getting Cluster information failed %v", errnodes)
+	} else {
+		var retVal string
+		var ipAdded bool
+		for _, n := range nodes.Items {
+			nodeLabels := make(map[string]string)
+			for k, v := range n.GetLabels() {
+				nodeLabels[k] = v
+			}
+			for k, v := range n.GetAnnotations() {
+				nodeLabels[k] = v
+			}
+			v, ok := nodeLabels["beta.kubernetes.io/os"]
+			if ok && v == "linux" {
+				klog.V(2).Infof("Found a linux node: [%s]", n.GetName())
+				//csi, ok := nodeLabels["csi.volume.kubernetes.io/nodeid"]
+				csi, ok := nodeLabels["node-role.kubernetes.io/worker"]
+				if ok {
+					klog.V(2).Infof("Found a linux node: [%s] role [%s]", n.GetName(), csi)
+					ipfound := false
+					var ip string
+					for _, addr := range n.Status.Addresses {
+						switch addr.Type {
+						case corev1.NodeInternalIP:
+							ip = addr.Address
+							ipfound = true
+							break
+						}
+						if ipfound {
+							break
+						}
+					}
+					if ipfound && ipAdded {
+						retVal = fmt.Sprintf("%s %s:%s", retVal, ip, gRpcPort)
+					} else if ipfound {
+						ipAdded = true
+						retVal = fmt.Sprintf("%s:%s", ip, gRpcPort)
+					}
+				}
+			}
+		}
+		klog.V(2).Infof("Node in PWX Cluster [%s]", retVal)
+		parts := strings.Split(retVal, " ")
+		i := 0
+		for i < len(parts) {
+			klog.V(2).Infof("Parts[%d]: %s", i, parts[i])
+			i++
+		}
+	}
+	klog.V(2).Infof("Logging Cluster Information Complete")
+
+	klog.V(2).Infof("Populating by reading file")
+	bytearr, err := ioutil.ReadFile("C:\\var\\tmp\\data")
+	if err != nil {
+		klog.V(2).Infof("ReadFile Failed: [%v]", err)
+	} else {
+		nodeInformation := string(bytearr)
+		parts := strings.Split(nodeInformation, " ")
+		klog.V(2).Infof("NodeInformation [%s]: len of parts[%d]", nodeInformation, len(parts))
+		i := 0
+		for i < len(parts) {
+			klog.V(2).Infof("Parts[%d]: %s", i, parts[i])
+			i++
+		}
+	}
+}
+
 func handle(modeVal common.DriverModeFlag) {
 	versionMeta, err := pwx.GetVersionYAML(*driverName)
 	if err != nil {
 		klog.Fatalf("%v", err)
 	}
+
 	klog.V(2).Infof("\nDRIVER INFORMATION[mode %v]:\n-------------------\n%s\n\nStreaming logs below:",
 		modeVal, versionMeta)
 
 	driverOptions := common.DriverOptions{
-		NodeID:               *nodeID,
-		DriverName:           *driverName,
-		Mode:                 modeVal,
-		Endpoint:             *endpoint,
-		WorkDir:              *workingMountDir,
+		NodeID:     *nodeID,
+		DriverName: *driverName,
+		Mode:       modeVal,
+		Endpoint:   *endpoint,
+		WorkDir:    *workingMountDir,
 	}
 	driverOptions.SmbOpts.RemoveSMBMappingDuringUnmount = *removeSMBMappingDuringUnmount
 	driverOptions.SmbOpts.WorkingMountDir = *workingMountDir

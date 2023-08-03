@@ -640,7 +640,7 @@ func (mounter *csiProxyMounter) SMBMount(source, target, fsType string, mountOpt
 	// Create workpath.smb mode file to indicate created by <protocol>.mount
 	tmpFile := fmt.Sprintf("%s%s", workPath, "smb")
 	klog.V(2).Infof("AddDrive Creating temporary file to store protocol %s", tmpFile)
-	if tmpFh, err2 := os.Create(tmpFile); err2 !=  nil {
+	if tmpFh, err2 := os.Create(tmpFile); err2 != nil {
 		klog.V(2).Infof("AddDrive Creating temporary file %s failed %v", tmpFile, err2)
 	} else {
 		tmpFh.Close()
@@ -648,12 +648,12 @@ func (mounter *csiProxyMounter) SMBMount(source, target, fsType string, mountOpt
 
 	// Link WorkPath =>Target.
 	klog.V(2).Infof("Linking %s on %s", normalizedTarget, workPath)
-        cmdLine = fmt.Sprintf("mklink /D %s %s", normalizedTarget, workPath)
-        _, out, err = RunCmd(cmdLine)
-        if err != nil {
-                klog.V(2).Infof("AddDrive MkVolume: volid %s, failed %v", volid, err)
-                return fmt.Errorf("error mkvolume. cmd %s, output %s, err %v", cmdLine, string(out), err)
-        }
+	cmdLine = fmt.Sprintf("mklink /D %s %s", normalizedTarget, workPath)
+	_, out, err = RunCmd(cmdLine)
+	if err != nil {
+		klog.V(2).Infof("AddDrive MkVolume: volid %s, failed %v", volid, err)
+		return fmt.Errorf("error mkvolume. cmd %s, output %s, err %v", cmdLine, string(out), err)
+	}
 
 	if mounter.RemoveSMBMappingDuringUnmount {
 		if err := incementRemotePathReferencesCount(mappingPath, source); err != nil {
@@ -668,15 +668,15 @@ func (mounter *csiProxyMounter) NewSmbGlobalMapping(req *smb.NewSmbGlobalMapping
 	// use PowerShell Environment Variables to store user input string to prevent command line injection
 	// https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-5.1
 	cmdLine := fmt.Sprintf(`$PWord = ConvertTo-SecureString -String $Env:smbpassword -AsPlainText -Force` +
-	`;$Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList localhost\$Env:smbuser, $PWord` +
+		`;$Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList localhost\$Env:smbuser, $PWord` +
 		`;New-SmbGlobalMapping -RemotePath $Env:smbremotepath -Credential $Credential -Persistent 1`)
 
 	if _, output, err := RunPowershellCmd(cmdLine, fmt.Sprintf("smbuser=%s", req.Username),
-			fmt.Sprintf("smbpassword=%s", req.Password),
-			fmt.Sprintf("smbremotepath=%s", req.RemotePath)); err != nil {
+		fmt.Sprintf("smbpassword=%s", req.Password),
+		fmt.Sprintf("smbremotepath=%s", req.RemotePath)); err != nil {
 
 		errv := fmt.Errorf("NewSmbGlobalMapping failed. output: %q, err: %v, user=%s, pass=%s, remotepath=%s",
-				   string(output), err, req.Username, req.Password, req.RemotePath)
+			string(output), err, req.Username, req.Password, req.RemotePath)
 		klog.V(2).Infof("NewSmbGlobalMapping failed %v", errv)
 		return errv
 	}
@@ -770,11 +770,11 @@ func (mounter *csiProxyMounter) Mount(source string, target string, fstype strin
 		klog.V(4).Infof("Mount: Rmdir on target %s returned %v", target, err)
 	}
 	klog.V(4).Infof("Mount: Symlink from source[%s] target [%s]", source, target)
-	err:= os.Symlink(source, target)
+	err := os.Symlink(source, target)
 	if err != nil {
 		klog.V(4).Infof("Mount: symlink failed for  [%s] to [%s]", source, target, err)
 		klog.V(4).Infof("Mount: Trying mklink")
-		cmd := exec.Command("cmd", "/c", "mklink", "/D", target,  source)
+		cmd := exec.Command("cmd", "/c", "mklink", "/D", target, source)
 		_, err = cmd.CombinedOutput()
 		if err != nil {
 			klog.V(4).Infof("Mount: mlinked failed for  [%s] to [%s]", source, target, err)
@@ -824,7 +824,7 @@ func (mounter *csiProxyMounter) IsLikelyNotMountPoint(path string) (bool, error)
 	klog.V(4).Infof("IsLikelyNotMountPoint: %s", path)
 	info, err := os.Stat(normalizeWindowsPath(path, false))
 	if err == nil {
-		return os.ModeSymlink & info.Mode() != os.ModeSymlink, nil
+		return os.ModeSymlink&info.Mode() != os.ModeSymlink, nil
 	}
 	if os.IsNotExist(err) {
 		return true, os.ErrNotExist
@@ -913,9 +913,7 @@ func (mounter *csiProxyMounter) AddDrive(
 		volid, share_path, sensitiveMountOptions)
 
 	volName := volid
-	cmdLine := fmt.Sprintf(`$Credential = Get-StoredCredential -Target  pxd.portworx.cred.com; ` +
-		`New-PSDrive -Name ${Env:volid} ` +
-		`-PSProvider FileSystem -Credential $Credential ` +
+	cmdLine := fmt.Sprintf(`New-PSDrive -Name ${Env:volid} -PSProvider FileSystem ` +
 		`-Root ${Env:path} -Scope Global -Description ${Env:pwxtag}`)
 
 	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volid=%s", volName),
@@ -1144,7 +1142,7 @@ func (mounter *csiProxyMounter) NfsMount(
 	}
 
 	tmpPath := fmt.Sprintf("%s%s", volumePath(volid), "nfs")
-        klog.V(2).Infof("AddDrive Creating file %s", tmpPath)
+	klog.V(2).Infof("AddDrive Creating file %s", tmpPath)
 	if emptyfile, err2 := os.Create(tmpPath); err2 != nil {
 		klog.V(4).Infof("Unable to create tmppath %s %v", volid, err2)
 	} else {

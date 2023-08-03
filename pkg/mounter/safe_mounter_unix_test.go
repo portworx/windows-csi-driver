@@ -19,8 +19,8 @@ package mounter
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
 	"github.com/portworx/windows-csi-driver/pkg/common"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewSafeMounter(t *testing.T) {

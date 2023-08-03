@@ -97,7 +97,7 @@ func decrementRemotePathReferencesCount(mappingPath, remotePath string) error {
 	mappingPath = strings.TrimPrefix(mappingPath, "\\\\c:\\")
 	path := filepath.Join(basePath, strings.TrimPrefix(mappingPath, "\\\\"))
 	err := os.MkdirAll(path, os.ModeDir)
-	if err != nil  && !os.IsExist(err) {
+	if err != nil && !os.IsExist(err) {
 		return err
 	}
 	filePath := filepath.Join(path, getMd5(remotePath))

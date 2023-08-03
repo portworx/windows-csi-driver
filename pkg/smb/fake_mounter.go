@@ -21,8 +21,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/portworx/windows-csi-driver/pkg/mounter"
 	"github.com/portworx/windows-csi-driver/pkg/common"
+	"github.com/portworx/windows-csi-driver/pkg/mounter"
 
 	mount "k8s.io/mount-utils"
 )

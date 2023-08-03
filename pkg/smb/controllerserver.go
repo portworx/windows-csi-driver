@@ -24,10 +24,10 @@ import (
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/portworx/windows-csi-driver/pkg/common"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog/v2"
-	"github.com/portworx/windows-csi-driver/pkg/common"
 )
 
 const (

@@ -29,7 +29,7 @@ import (
 )
 
 func Mount(m *mount.SafeFormatAndMount, source, target, fsType string, mountOptions, sensitiveMountOptions []string) error {
-	klog.V(4).Infof("Mount source: %s target: %s",source, target)
+	klog.V(4).Infof("Mount source: %s target: %s", source, target)
 	if proxy, ok := m.Interface.(mounter.CSIProxyMounter); ok {
 		return proxy.SMBMount(source, target, fsType, mountOptions, sensitiveMountOptions)
 	}

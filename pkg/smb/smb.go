@@ -24,14 +24,14 @@ import (
 	"k8s.io/klog/v2"
 	mount "k8s.io/mount-utils"
 
-	csicommon "github.com/portworx/windows-csi-driver/pkg/csi-common"
-	utils "github.com/portworx/windows-csi-driver/pkg/utils"
-	"github.com/portworx/windows-csi-driver/pkg/mounter"
 	"github.com/portworx/windows-csi-driver/pkg/common"
+	csicommon "github.com/portworx/windows-csi-driver/pkg/csi-common"
+	"github.com/portworx/windows-csi-driver/pkg/mounter"
+	utils "github.com/portworx/windows-csi-driver/pkg/utils"
 )
 
 const (
-	defaultDomainName    = "AZURE"
+	defaultDomainName = "AZURE"
 )
 
 // smbDriver implements all interfaces of CSI drivers

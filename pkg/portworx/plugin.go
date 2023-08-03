@@ -1,11 +1,11 @@
 package portworx
 
 import (
-	"k8s.io/klog/v2"
 	"github.com/portworx/windows-csi-driver/pkg/common"
 	iscsi "github.com/portworx/windows-csi-driver/pkg/iscsi"
 	nfs "github.com/portworx/windows-csi-driver/pkg/nfs"
 	smb "github.com/portworx/windows-csi-driver/pkg/smb"
+	"k8s.io/klog/v2"
 )
 
 // NewDriver Creates a NewCSIDriver object. Assumes vendor version is equal to driver version &
