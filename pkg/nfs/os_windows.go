@@ -201,7 +201,7 @@ func (d *nfsDriver)getRpcAddr() (string, error) {
 	var ip string
 	nodes, errnodes := core.Instance().GetNodes()
 	if errnodes != nil {
-		klog.V(2).Infof("Phani: Getting Node information failed error[%v]", errnodes)
+		klog.V(2).Infof("Getting Node information failed error[%v]", errnodes)
 		return "", err
 	} else {
 		// For each node, get's it's annotations and labels
@@ -234,7 +234,7 @@ func (d *nfsDriver)getRpcAddr() (string, error) {
 		}
 	}
 	if ipfound {
-		str = fmt.Sprintf("%s:%s", ip, gRpcPort)
+		str := fmt.Sprintf("%s:%s", ip, gRpcPort)
 		return str, nil
 	}
 	return "", nil

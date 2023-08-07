@@ -36,6 +36,7 @@ var (
 	removeSMBMappingDuringUnmount = flag.Bool("remove-smb-mapping-during-unmount", true, "remove SMBMapping during unmount on Windows node")
 	workingMountDir               = flag.String("working-mount-dir", "/tmp", "working directory for provisioner to mount smb shares temporarily")
 	mode                          = flag.String("mode", "nfs", "operational mode, one of iscsi/smb/nfs. default nfs")
+	printClusterInformation       = flag.Bool("printClusterInformation", false, "print Cluster Information")
 )
 
 func main() {
@@ -53,8 +54,7 @@ func main() {
 		// nodeid is not needed in controller component
 		klog.Warning("nodeid is empty")
 	}
-	var debug = false
-	if debug {
+	if *printClusterInformation {
 		displayClusterInformation()
 	}
 
