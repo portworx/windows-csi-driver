@@ -173,7 +173,7 @@ func getLocalIPList() (string, error) {
 	return "", status.Error(codes.InvalidArgument, "failed to get localip")
 }
 
-func (d *nfsDriver)getRpcAddr(useRestAPI bool) (string, error) {
+func (d *nfsDriver)getRpcAddr() (string, error) {
 	// Get Rpc port from portworx service.
 	// TODO: Remove the hardcode and search for portworx-service in all namespaces.
 	svc, err := core.Instance().GetService("portworx-service", "kube-system")
@@ -182,7 +182,7 @@ func (d *nfsDriver)getRpcAddr(useRestAPI bool) (string, error) {
 		return "", err
 	}
 
-	var restPort, gRpcPort string
+	var gRpcPort string
 	for _, svcPort := range svc.Spec.Ports {
 		if svcPort.Name == "px-sdk" {
 			targetPort := svcPort.TargetPort
@@ -190,13 +190,6 @@ func (d *nfsDriver)getRpcAddr(useRestAPI bool) (string, error) {
 				gRpcPort = targetPort.StrVal
 			} else {
 				gRpcPort = fmt.Sprintf("%d", targetPort.IntValue())
-			}
-		} else if svcPort.Name == "px-rest" {
-			targetPort := svcPort.TargetPort
-			if targetPort.Type == intstr.String {
-				restPort = targetPort.StrVal
-			} else {
-				restPort = fmt.Sprintf("%d", targetPort.IntValue())
 			}
 		}
 	}
@@ -221,7 +214,7 @@ func (d *nfsDriver)getRpcAddr(useRestAPI bool) (string, error) {
 			for k, v := range n.GetAnnotations() {
 				nodeLabels[k] = v
 			}
-			klog.V(2).Infof("NodePublishVolume: Kubenetest Node [%v] Labels[%v]", n.GetName(), nodeLabels)
+			klog.V(2).Infof("NodePublishVolume: Kubernetes Node [%v]", n.GetName())
 			v, ok := nodeLabels["beta.kubernetes.io/os"]
 			if ok && v == "linux" {
 				csi, ok := nodeLabels["csi.volume.kubernetes.io/nodeid"]
@@ -241,12 +234,7 @@ func (d *nfsDriver)getRpcAddr(useRestAPI bool) (string, error) {
 		}
 	}
 	if ipfound {
-		var str string
-		if useRestAPI {
-			str = fmt.Sprintf("%s:%s", ip, restPort)
-		} else {
-			str = fmt.Sprintf("%s:%s", ip, gRpcPort)
-		}
+		str = fmt.Sprintf("%s:%s", ip, gRpcPort)
 		return str, nil
 	}
 	return "", nil
@@ -291,74 +279,31 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	// handcraft export path /var/lib/osd/pxns/<volumeID>
 	// mount \\<attachedon>\exportpath.
 
-	useGrpc := true
-	ipAddr, err := d.getRpcAddr(!useGrpc)
+	ipAddr, err := d.getRpcAddr()
 	if err != nil {
 		return nil, err
 	}
-	if useGrpc {
-		conn, err := grpc.Dial(ipAddr, grpc.WithInsecure())
-		if err != nil {
-			klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ip, volumeID, err)
-			return nil, err
-		}
-
-		mountUnmountClient := api.NewOpenStorageMountAttachClient(conn)
-		_, err = mountUnmountClient.Attach(ctx, &api.SdkVolumeAttachRequest{VolumeId: volumeID})
-		if err != nil {
-			return nil, err
-		}
-		klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Issuing Mount Grpc", ipAddr, volumeID)
-		_, err = mountUnmountClient.Mount(ctx, &api.SdkVolumeMountRequest{MountPath: "/dummy", VolumeId: volumeID, DriverOptions: driverOpts})
-		if err != nil {
-			return nil, err
-		}
-		volumeClient := api.NewOpenStorageVolumeClient(conn)
-		volInfo, err := volumeClient.Inspect(ctx, &api.SdkVolumeInspectRequest{VolumeId: volumeID})
-		klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Inspect returned [%v] volInfo[%v]", ipAddr, volumeID, err, volInfo)
-		endpoint = volInfo.GetVolume().GetAttachedOn()
-		exportpath = fmt.Sprintf("/var/lib/osd/pxns/%s", volumeID)
-	} else {
-		klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]", ipAddr, volumeID)
-		cmdLine := fmt.Sprintf(
-			`Invoke-RestMethod -Uri "http://%s/v1/mountattach/attach " `+
-			`-Method Post -ContentType "application/json" -Body "{`+"`"+
-			`"volume_id`+"`"+`":`+"`"+`"%s`+"`"+`"}"`, ipAddr, volumeID)
-		out1, out2, err := mounter.RunPowershellCmd(cmdLine)
-		if err != nil {
-			klog.V(2).Infof("Attach RESTAPI to [%s] for volume[%s] failed err [%v]", ipAddr, volumeID, err)
-			return nil, err
-		}
-		outString := string(out2[:])
-		outString2 := string(out1[:])
-		klog.V(2).Infof("NodeStageVolume: Attach CLI[%v] Error[%v] Out1[%v] Out2[%v]", cmdLine, err, outString2, outString)
-		cmdLine = fmt.Sprintf(
-			`Invoke-RestMethod -Uri "http://%s/v1/mountattach/mount "`+
-				`-Method Post -ContentType "application/json" -Body "{`+
-				"`"+`"mount_path`+"`"+`":`+"`"+`"/dummy`+"`"+`", `+"`"+`"volume_id`+"`"+`":`+
-				"`"+`"%s`+"`"+`"}"`, ipAddr, volumeID)
-		out1, out2, err = mounter.RunPowershellCmd(cmdLine)
-		if err != nil {
-			klog.V(2).Infof("Mount RESTAPI to [%s] for volume[%s] failed err [%v]", ipAddr, volumeID, err)
-			return nil, err
-		}
-		outString = string(out2[:])
-		outString2 = string(out1[:])
-		klog.V(2).Infof("NodeStageVolume: Mount CLI[%v] Error[%v] Out1[%v] Out2[%v]", cmdLine, err, outString2, outString)
-		cmdLine = fmt.Sprintf(
-			`$res = Invoke-RestMethod -Uri "http://%s/v1/volumes/inspect/%s"; echo $res.volume.attached_on`, ipAddr, volumeID)
-		out1, out2, err = mounter.RunPowershellCmd(cmdLine, fmt.Sprintf("ip_address=%s", ip), fmt.Sprintf("volume_id=%s", volumeID))
-		if err != nil {
-			klog.V(2).Infof("Volume Inspect RESTAPI to [%s] for volume[%s] failed err [%v]", ipAddr, volumeID, err)
-			return nil, err
-		}
-		outString = string(out2[:])
-		outString2 = string(out1[:])
-		outString2 = strings.TrimSuffix(outString2, "\r\n")
-		klog.V(2).Infof("NodeStageVolume: Inspect CLI[%v], volumeInfo[%v] Error[%v] out1[%v]", cmdLine, outString2, err, outString)
-		endpoint = outString2
-		exportpath = fmt.Sprintf("/var/lib/osd/pxns/%s", volumeID)
+	conn, err := grpc.Dial(ipAddr, grpc.WithInsecure())
+	if err != nil {
+		klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ip, volumeID, err)
+		return nil, err
 	}
+
+	mountUnmountClient := api.NewOpenStorageMountAttachClient(conn)
+	_, err = mountUnmountClient.Attach(ctx, &api.SdkVolumeAttachRequest{VolumeId: volumeID})
+	if err != nil {
+		return nil, err
+	}
+	klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Issuing Mount Grpc", ipAddr, volumeID)
+	_, err = mountUnmountClient.Mount(ctx, &api.SdkVolumeMountRequest{MountPath: "/dummy", VolumeId: volumeID, DriverOptions: driverOpts})
+	if err != nil {
+		return nil, err
+	}
+	volumeClient := api.NewOpenStorageVolumeClient(conn)
+	volInfo, err := volumeClient.Inspect(ctx, &api.SdkVolumeInspectRequest{VolumeId: volumeID})
+	klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Inspect returned [%v] volInfo[%v]", ipAddr, volumeID, err, volInfo)
+	endpoint = volInfo.GetVolume().GetAttachedOn()
+	exportpath = fmt.Sprintf("/var/lib/osd/pxns/%s", volumeID)
 
 	csimode = "nfs"
 
@@ -430,8 +375,7 @@ func (d *nfsDriver) nfsNodeUnstageVolume(ctx context.Context, req *csi.NodeUnsta
 		return nil, status.Errorf(codes.Internal, "failed to unmount staging target %q: %v", stagingTargetPath, err)
 	}
 	// Inform Linux Px nodes.
-	useGrpc := true
-	ipAddr, err := d.getRpcAddr(!useGrpc)
+	ipAddr, err := d.getRpcAddr()
 	if err != nil {
 		return nil, err
 	}
@@ -441,49 +385,22 @@ func (d *nfsDriver) nfsNodeUnstageVolume(ctx context.Context, req *csi.NodeUnsta
 	if myip != "" {
 		driverOpts["CallingNodeIP"] = myip
 	}
-	if useGrpc {
-		conn, err := grpc.Dial(ipAddr, grpc.WithInsecure())
-		if err != nil {
-			klog.V(2).Infof("NodeUnstageVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ipAddr, volumeID, err)
-			return nil, err
-		}
-		mountUnmountClient := api.NewOpenStorageMountAttachClient(conn)
-		_, err = mountUnmountClient.Unmount(ctx, &api.SdkVolumeUnmountRequest{MountPath: "/dummy", VolumeId: volumeID,  DriverOptions: driverOpts})
-		if  err != nil {
-			klog.V(2).Infof("NodeUnstageVolume: IpAddress [%v] volumeID[%v] Unable to Unmount volume. Error[%v]", ipAddr, volumeID, err)
-			return nil, err
-		}
-		_, err = mountUnmountClient.Detach(ctx, &api.SdkVolumeDetachRequest{VolumeId: volumeID,  DriverOptions: driverOpts})
-		if  err != nil {
-			klog.V(2).Infof("NodeUnstageVolume: IpAddress [%v] volumeID[%v] Unable to Detach volume. Error[%v]", ipAddr, volumeID, err)
-			return nil, err
-		}
-	} else {
-		klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]", ipAddr, volumeID)
-		cmdLine := fmt.Sprintf(
-			`Invoke-RestMethod -Uri "http://%s/v1/mountattach/unmount " `+
-			`-Method Post -ContentType "application/json" -Body "{`+
-			"`"+`"mount_path`+"`"+`":`+"`"+`"/dummy`+"`"+`", `+
-			`"volume_id`+"`"+`":`+"`"+`"%s`+"`"+`"}"`, ipAddr, volumeID)
-		out1, out2, err := mounter.RunPowershellCmd(cmdLine)
-		if err != nil {
-			klog.V(2).Infof("Unmount RESTAPI to [%s] for volume[%s] failed err [%v]", ipAddr, volumeID, err)
-			return nil, err
-		}
-		outString := string(out2[:])
-		outString2 := string(out1[:])
-		klog.V(2).Infof("NodeStageVolume: Attach CLI[%v] Error[%v] Out1[%v] Out2[%v]", cmdLine, err, outString2, outString)
-		cmdLine = fmt.Sprintf(
-			`Invoke-RestMethod -Uri "http://%s/v1/mountattach/detach " `+
-			`-Method Post -ContentType "application/json" -Body "{`+"`"+
-			`"volume_id`+"`"+`":`+"`"+`"%s`+"`"+`"}"`, ipAddr, volumeID)
-		out1, out2, err = mounter.RunPowershellCmd(cmdLine)
-		if err != nil {
-			klog.V(2).Infof("Detach RESTAPI to [%s] for volume[%s] failed err [%v]", ipAddr, volumeID, err)
-			return nil, err
-		}
+	conn, err := grpc.Dial(ipAddr, grpc.WithInsecure())
+	if err != nil {
+		klog.V(2).Infof("NodeUnstageVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ipAddr, volumeID, err)
+		return nil, err
 	}
-
+	mountUnmountClient := api.NewOpenStorageMountAttachClient(conn)
+	_, err = mountUnmountClient.Unmount(ctx, &api.SdkVolumeUnmountRequest{MountPath: "/dummy", VolumeId: volumeID,  DriverOptions: driverOpts})
+	if  err != nil {
+		klog.V(2).Infof("NodeUnstageVolume: IpAddress [%v] volumeID[%v] Unable to Unmount volume. Error[%v]", ipAddr, volumeID, err)
+		return nil, err
+	}
+	_, err = mountUnmountClient.Detach(ctx, &api.SdkVolumeDetachRequest{VolumeId: volumeID,  DriverOptions: driverOpts})
+	if  err != nil {
+		klog.V(2).Infof("NodeUnstageVolume: IpAddress [%v] volumeID[%v] Unable to Detach volume. Error[%v]", ipAddr, volumeID, err)
+		return nil, err
+	}
 
 	klog.V(2).Infof("NodeUnstageVolume: unmount volume %s on %s successfully", volumeID, stagingTargetPath)
 	return &csi.NodeUnstageVolumeResponse{}, nil
