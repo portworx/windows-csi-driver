@@ -19,9 +19,11 @@ package nfs
 import (
 	"fmt"
 	"net"
+	"encoding/base64"
 	//orgcontext "context"
 	"io/ioutil"
 	"os"
+	"path"
 	_ "path/filepath"
 	_ "runtime"
 	"strings"
@@ -260,7 +262,11 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	driverOpts := make(map[string]string)
 	driverOpts["WindowsClient"] = "true"
 	if myip != "" {
-		driverOpts["CallingNodeIP"] = myip
+		driverOpts[api.OptProxyCaller] = myip
+		driverOpts[api.OptProxyCallerIP] = myip
+		driverOpts[api.OptMountID] = base64.StdEncoding.EncodeToString(
+                        []byte(strings.TrimSuffix(targetPath, "/")),
+			)
 	}
 	var (
 		exportpath            string
@@ -295,7 +301,8 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 		return nil, err
 	}
 	klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Issuing Mount Grpc", ipAddr, volumeID)
-	_, err = mountUnmountClient.Mount(ctx, &api.SdkVolumeMountRequest{MountPath: "/dummy", VolumeId: volumeID, DriverOptions: driverOpts})
+	mountPath := path.Join(api.SharedVolExportPrefix, volumeID)
+	_, err = mountUnmountClient.Mount(ctx, &api.SdkVolumeMountRequest{MountPath: mountPath, VolumeId: volumeID, DriverOptions: driverOpts})
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +390,11 @@ func (d *nfsDriver) nfsNodeUnstageVolume(ctx context.Context, req *csi.NodeUnsta
 	driverOpts := make(map[string]string)
 	driverOpts["WindowsClient"] = "true"
 	if myip != "" {
-		driverOpts["CallingNodeIP"] = myip
+		driverOpts[api.OptProxyCaller] = myip
+		driverOpts[api.OptProxyCallerIP] = myip
+		driverOpts[api.OptMountID] = base64.StdEncoding.EncodeToString(
+                        []byte(strings.TrimSuffix(stagingTargetPath, "/")),
+			)
 	}
 	conn, err := grpc.Dial(ipAddr, grpc.WithInsecure())
 	if err != nil {

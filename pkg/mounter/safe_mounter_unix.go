@@ -20,12 +20,11 @@ limitations under the License.
 package mounter
 
 import (
-	"github.com/portworx/windows-csi-driver/pkg/common"
 	mount "k8s.io/mount-utils"
 	utilexec "k8s.io/utils/exec"
 )
 
-func NewSafeMounter(mode common.DriverMode, removeSMBMappingDuringUnmount bool) (*mount.SafeFormatAndMount, error) {
+func NewSafeMounter(mode string, removeSMBMappingDuringUnmount bool) (*mount.SafeFormatAndMount, error) {
 	return &mount.SafeFormatAndMount{
 		Interface: mount.New(""),
 		Exec:      utilexec.New(),
