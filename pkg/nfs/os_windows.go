@@ -28,6 +28,7 @@ import (
 	_ "runtime"
 	"strings"
 	"time"
+	"math/rand"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/libopenstorage/openstorage/api"
@@ -201,45 +202,48 @@ func (d *nfsDriver)getRpcAddr() (string, error) {
 	// Pick a linux node. For now pick the first node.
 	var ipfound bool
 	var ip string
+	var ips = make(map[int]string)
+	var i = 0
 	nodes, errnodes := core.Instance().GetNodes()
 	if errnodes != nil {
 		klog.V(2).Infof("Getting Node information failed error[%v]", errnodes)
 		return "", err
-	} else {
-		// For each node, get's it's annotations and labels
-		for _, n := range nodes.Items {
-			nodeLabels := make(map[string]string)
-			for k, v := range n.GetLabels() {
-				nodeLabels[k] = v
-			}
+	}
+	// For each node, get's it's annotations and labels
+	for _, n := range nodes.Items {
+		nodeLabels := make(map[string]string)
+		for k, v := range n.GetLabels() {
+			nodeLabels[k] = v
+		}
 
-			for k, v := range n.GetAnnotations() {
-				nodeLabels[k] = v
-			}
-			klog.V(2).Infof("NodePublishVolume: Kubernetes Node [%v]", n.GetName())
-			v, ok := nodeLabels["beta.kubernetes.io/os"]
-			if ok && v == "linux" {
-				csi, ok := nodeLabels["csi.volume.kubernetes.io/nodeid"]
-				if ok && strings.Contains(csi, "pxd.portworx.com") {
-					if !ipfound {
-						for _, addr := range n.Status.Addresses {
-							switch addr.Type {
-							case corev1.NodeInternalIP:
-								ip = addr.Address
-								ipfound = true
-								break
-							}
-						}
+		for k, v := range n.GetAnnotations() {
+			nodeLabels[k] = v
+		}
+		klog.V(2).Infof("NodePublishVolume: Kubernetes Node [%v]", n.GetName())
+		v, ok := nodeLabels["beta.kubernetes.io/os"]
+		if ok && v == "linux" {
+			csi, ok := nodeLabels["csi.volume.kubernetes.io/nodeid"]
+			if ok && strings.Contains(csi, "pxd.portworx.com") {
+				for _, addr := range n.Status.Addresses {
+					switch addr.Type {
+					case corev1.NodeInternalIP:
+						ip = addr.Address
+						ipfound = true
+						ips[i] = ip
+						i = i+1
+						break;
 					}
 				}
 			}
 		}
 	}
-	if ipfound {
-		str := fmt.Sprintf("%s:%s", ip, gRpcPort)
-		return str, nil
+	if !ipfound {
+		return "", status.Error(codes.NotFound, "No suitable linux node found")
 	}
-	return "", nil
+
+	randNum := rand.Intn(i)
+	str := fmt.Sprintf("%s:%s", ips[randNum], gRpcPort)
+	return str, nil
 }
 
 // NodeStageVolume mount the volume to a staging path
