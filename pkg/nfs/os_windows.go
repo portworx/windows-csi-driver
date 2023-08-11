@@ -47,6 +47,7 @@ import (
 	"golang.org/x/net/context"
 	corev1 "k8s.io/api/core/v1"
 	mount "k8s.io/mount-utils"
+	k8net "k8s.io/utils/net"
 
 	"github.com/portworx/windows-csi-driver/pkg/common"
 	"google.golang.org/grpc"
@@ -167,7 +168,7 @@ func getLocalIPList() (string, error) {
 				ip = v.IP
 			}
 			// process IP address
-			if ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() {
+			if ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() && k8net.IsIPv4(ip) {
 				klog.V(2).Infof("MyIP=%s", ip.String())
 				return ip.String(), nil
 			}
