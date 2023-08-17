@@ -313,7 +313,10 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	}
 	volumeClient := api.NewOpenStorageVolumeClient(conn)
 	volInfo, err := volumeClient.Inspect(ctx, &api.SdkVolumeInspectRequest{VolumeId: volumeID})
-	klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Inspect returned [%v] volInfo[%v]", ipAddr, volumeID, err, volInfo)
+	if err != nil {
+		return nil, err
+	}
+	//klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Inspect returned [%v] volInfo[%v]", ipAddr, volumeID, err, volInfo)
 	endpoint = volInfo.GetVolume().GetAttachedOn()
 	exportpath = fmt.Sprintf("/var/lib/osd/pxns/%s", volumeID)
 
@@ -406,8 +409,10 @@ func (d *nfsDriver) nfsNodeUnstageVolume(ctx context.Context, req *csi.NodeUnsta
 		klog.V(2).Infof("NodeUnstageVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ipAddr, volumeID, err)
 		return nil, err
 	}
+	mountPath := path.Join(api.SharedVolExportPrefix, volumeID)
 	mountUnmountClient := api.NewOpenStorageMountAttachClient(conn)
-	_, err = mountUnmountClient.Unmount(ctx, &api.SdkVolumeUnmountRequest{MountPath: "/dummy", VolumeId: volumeID,  DriverOptions: driverOpts})
+	klog.V(2).Infof("NodeUnstageVolume: IpAddress [%v] volumeID[%v]: Issuing Unmount path[%s]", ipAddr, volumeID, err, mountPath)
+	_, err = mountUnmountClient.Unmount(ctx, &api.SdkVolumeUnmountRequest{MountPath: mountPath, VolumeId: volumeID,  DriverOptions: driverOpts})
 	if  err != nil {
 		klog.V(2).Infof("NodeUnstageVolume: IpAddress [%v] volumeID[%v] Unable to Unmount volume. Error[%v]", ipAddr, volumeID, err)
 		return nil, err
