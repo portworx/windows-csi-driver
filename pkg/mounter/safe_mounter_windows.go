@@ -20,11 +20,11 @@ limitations under the License.
 package mounter
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	filepath "path/filepath"
 	"strconv"
 	"strings"
@@ -34,13 +34,9 @@ import (
 
 	iscsi "github.com/kubernetes-csi/csi-proxy/client/api/iscsi/v1alpha2"
 
-	fs "github.com/kubernetes-csi/csi-proxy/client/api/filesystem/v1"
-	fsclient "github.com/kubernetes-csi/csi-proxy/client/groups/filesystem/v1"
-
 	smb "github.com/kubernetes-csi/csi-proxy/client/api/smb/v1"
-	smbclient "github.com/kubernetes-csi/csi-proxy/client/groups/smb/v1"
 
-	"github.com/sulakshm/csi-driver/pkg/common"
+	"github.com/portworx/windows-csi-driver/pkg/common"
 	"k8s.io/klog/v2"
 	mount "k8s.io/mount-utils"
 	utilexec "k8s.io/utils/exec"
@@ -51,6 +47,7 @@ type CSIProxyMounter interface {
 	mount.Interface
 
 	IscsiMounter
+	NfsMounter
 
 	SMBMount(source, target, fsType string, mountOptions, sensitiveMountOptions []string) error
 	SMBUnmount(target string) error
@@ -58,26 +55,20 @@ type CSIProxyMounter interface {
 	Rmdir(path string) error
 	IsMountPointMatch(mp mount.MountPoint, dir string) bool
 	ExistsPath(path string) (bool, error)
-	GetAPIVersions() string
 	EvalHostSymlinks(pathname string) (string, error)
 }
 
 var _ CSIProxyMounter = &csiProxyMounter{}
 
 type csiProxyMounter struct {
-	Mode                          common.DriverMode
-	FsClient                      *fsclient.Client
-	SMBClient                     *smbclient.Client
+	Mode                          common.DriverModeFlag
 	RemoveSMBMappingDuringUnmount bool
 }
 
-func normalizeWindowsPath(path string) string {
+func normalizeWindowsPath(path string, networkpath bool) string {
 	normalizedPath := strings.Replace(path, "/", "\\", -1)
-	if strings.HasPrefix(normalizedPath, "\\") {
+	if strings.HasPrefix(normalizedPath, "\\") && !networkpath {
 		normalizedPath = "c:" + normalizedPath
-	}
-	if !strings.HasSuffix(normalizedPath, "\\") {
-		normalizedPath += "\\"
 	}
 	return normalizedPath
 }
@@ -448,7 +439,7 @@ func (mounter *csiProxyMounter) IscsiSetMutualChapSecret(req *iscsi.SetMutualCha
 }
 
 func (mounter *csiProxyMounter) IscsiVolumeMount(fslabel string, path string) error {
-	normalizedPath := normalizeWindowsPath(path)
+	normalizedPath := normalizeWindowsPath(path, false)
 
 	// check if path already mounted.
 	if mounts, e := mounter.IscsiGetVolumeMounts(fslabel, false); e == nil {
@@ -476,7 +467,7 @@ func (mounter *csiProxyMounter) IscsiVolumeMount(fslabel string, path string) er
 }
 
 func (mounter *csiProxyMounter) IscsiVolumeUnmount(fslabel string, path string) error {
-	normalizedPath := normalizeWindowsPath(path)
+	normalizedPath := normalizeWindowsPath(path, false)
 
 	/// pre-check if volume exists
 	exists, err := mounter.IscsiVolumeExists(fslabel)
@@ -579,6 +570,7 @@ func (mounter *csiProxyMounter) IscsiGetTargetNodeAddress(fslabel string) (strin
 
 // Iscsi end
 
+// SMB + NFS start
 func (mounter *csiProxyMounter) SMBMount(source, target, fsType string, mountOptions, sensitiveMountOptions []string) error {
 	klog.V(2).Infof("SMBMount: remote path: %s local path: %s", source, target)
 
@@ -612,6 +604,8 @@ func (mounter *csiProxyMounter) SMBMount(source, target, fsType string, mountOpt
 		}
 	}
 
+	volid := mountOptions[1]
+	// TODO: Assert: volid is not empty
 	source = strings.Replace(source, "/", "\\", -1)
 	source = strings.TrimSuffix(source, "\\")
 	mappingPath, err := getRootMappingPath(source)
@@ -621,7 +615,7 @@ func (mounter *csiProxyMounter) SMBMount(source, target, fsType string, mountOpt
 	unlock := lock(mappingPath)
 	defer unlock()
 
-	normalizedTarget := normalizeWindowsPath(target)
+	normalizedTarget := normalizeWindowsPath(target, false)
 	smbMountRequest := &smb.NewSmbGlobalMappingRequest{
 		LocalPath:  normalizedTarget,
 		RemotePath: source,
@@ -629,15 +623,62 @@ func (mounter *csiProxyMounter) SMBMount(source, target, fsType string, mountOpt
 		Password:   sensitiveMountOptions[0],
 	}
 	klog.V(2).Infof("begin to NewSmbGlobalMapping %s on %s", source, normalizedTarget)
-	if _, err := mounter.SMBClient.NewSmbGlobalMapping(context.Background(), smbMountRequest); err != nil {
+	if err := mounter.NewSmbGlobalMapping(smbMountRequest); err != nil {
 		return fmt.Errorf("NewSmbGlobalMapping(%s, %s) failed with error: %v", source, normalizedTarget, err)
 	}
 	klog.V(2).Infof("NewSmbGlobalMapping %s on %s successfully", source, normalizedTarget)
+
+	//Link: MountedShare => WorkPath
+	workPath := volumePath(volid)
+	cmdLine := fmt.Sprintf("mklink /D %s %s", workPath, source)
+	_, out, err := RunCmd(cmdLine)
+	if err != nil {
+		klog.V(2).Infof("SMBMount failed for volume id: %s err: %v", volid, err)
+		return fmt.Errorf("err SMBMount. cmd %s, output %s, err %v", cmdLine, string(out), err)
+	}
+
+	// Create workpath.smb mode file to indicate created by <protocol>.mount
+	tmpFile := fmt.Sprintf("%s%s", workPath, "smb")
+	klog.V(2).Infof("AddDrive Creating temporary file to store protocol %s", tmpFile)
+	if tmpFh, err2 := os.Create(tmpFile); err2 != nil {
+		klog.V(2).Infof("AddDrive Creating temporary file %s failed %v", tmpFile, err2)
+	} else {
+		tmpFh.Close()
+	}
+
+	// Link WorkPath =>Target.
+	klog.V(2).Infof("Linking %s on %s", normalizedTarget, workPath)
+	cmdLine = fmt.Sprintf("mklink /D %s %s", normalizedTarget, workPath)
+	_, out, err = RunCmd(cmdLine)
+	if err != nil {
+		klog.V(2).Infof("AddDrive MkVolume: volid %s, failed %v", volid, err)
+		return fmt.Errorf("error mkvolume. cmd %s, output %s, err %v", cmdLine, string(out), err)
+	}
 
 	if mounter.RemoveSMBMappingDuringUnmount {
 		if err := incementRemotePathReferencesCount(mappingPath, source); err != nil {
 			return fmt.Errorf("incementMappingPathCount(%s, %s) failed with error: %v", mappingPath, source, err)
 		}
+	}
+	return nil
+}
+
+// Mount the share using smb protocol
+func (mounter *csiProxyMounter) NewSmbGlobalMapping(req *smb.NewSmbGlobalMappingRequest) error {
+	// use PowerShell Environment Variables to store user input string to prevent command line injection
+	// https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-5.1
+	cmdLine := fmt.Sprintf(`$PWord = ConvertTo-SecureString -String $Env:smbpassword -AsPlainText -Force` +
+		`;$Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList localhost\$Env:smbuser, $PWord` +
+		`;New-SmbGlobalMapping -RemotePath $Env:smbremotepath -Credential $Credential -Persistent 1`)
+
+	if _, output, err := RunPowershellCmd(cmdLine, fmt.Sprintf("smbuser=%s", req.Username),
+		fmt.Sprintf("smbpassword=%s", req.Password),
+		fmt.Sprintf("smbremotepath=%s", req.RemotePath)); err != nil {
+
+		errv := fmt.Errorf("NewSmbGlobalMapping failed. output: %q, err: %v, user=%s, pass=%s, remotepath=%s",
+			string(output), err, req.Username, req.Password, req.RemotePath)
+		klog.V(2).Infof("NewSmbGlobalMapping failed %v", errv)
+		return errv
 	}
 	return nil
 }
@@ -664,11 +705,8 @@ func (mounter *csiProxyMounter) SMBUnmount(target string) error {
 			}
 			count := getRemotePathReferencesCount(mappingPath)
 			if count == 0 {
-				smbUnmountRequest := &smb.RemoveSmbGlobalMappingRequest{
-					RemotePath: remotePath,
-				}
 				klog.V(2).Infof("begin to RemoveSmbGlobalMapping %s on %s", remotePath, target)
-				if _, err := mounter.SMBClient.RemoveSmbGlobalMapping(context.Background(), smbUnmountRequest); err != nil {
+				if err := mounter.RemoveSmbGlobalMapping(remotePath); err != nil {
 					return fmt.Errorf("RemoveSmbGlobalMapping failed with error: %v", err)
 				}
 				klog.V(2).Infof("RemoveSmbGlobalMapping %s on %s successfully", remotePath, target)
@@ -681,24 +719,73 @@ func (mounter *csiProxyMounter) SMBUnmount(target string) error {
 	return mounter.Rmdir(target)
 }
 
-// Mount just creates a soft link at target pointing to source.
-func (mounter *csiProxyMounter) Mount(source string, target string, fstype string, options []string) error {
-	klog.V(4).Infof("Mount: old name: %s. new name: %s", source, target)
-	// Mount is called after the format is done.
-	// TODO: Confirm that fstype is empty.
-	linkRequest := &fs.CreateSymlinkRequest{
-		SourcePath: normalizeWindowsPath(source),
-		TargetPath: normalizeWindowsPath(target),
-	}
-	_, err := mounter.FsClient.CreateSymlink(context.Background(), linkRequest)
-	if err != nil {
-		return err
+func (mounter *csiProxyMounter) RemoveSmbGlobalMapping(remotePath string) error {
+	//cmd := `Remove-SmbMapping -RemotePath $Env:smbremotepath -Force`
+	cmd := `Remove-SmbGlobalMapping -RemotePath $Env:smbremotepath -Force`
+	if _, output, err := RunPowershellCmd(cmd, fmt.Sprintf("smbremotepath=%s", remotePath)); err != nil {
+		return fmt.Errorf("UnmountSmbShare failed. output: %q, err: %v", string(output), err)
 	}
 	return nil
 }
 
+func (mounter *csiProxyMounter) IsSmbMapped(remotePath string) (bool, error) {
+	cmdLine := `$(Get-SmbMapping -RemotePath $Env:smbremotepath -ErrorAction Stop).Status `
+	cmdEnv := fmt.Sprintf("smbremotepath=%s", remotePath)
+	_, out, err := RunPowershellCmd(cmdLine, cmdEnv)
+	if err != nil {
+		return false, fmt.Errorf("error checking smb mapping. cmd %s, output: %s, err: %v", remotePath, string(out), err)
+	}
+
+	if len(out) == 0 || !strings.EqualFold(strings.TrimSpace(string(out)), "OK") {
+		return false, nil
+	}
+	return true, nil
+}
+
+func (mounter *csiProxyMounter) NewSmbLink(remotePath, localPath string) error {
+
+	if !strings.HasSuffix(remotePath, "\\") {
+		// Golang has issues resolving paths mapped to file shares if they do not end in a trailing \
+		// so add one if needed.
+		remotePath = remotePath + "\\"
+	}
+
+	cmdLine := `New-Item -ItemType SymbolicLink $Env:smblocalPath -Target $Env:smbremotepath`
+	_, output, err := RunPowershellCmd(cmdLine, fmt.Sprintf("smbremotepath=%s", remotePath), fmt.Sprintf("smblocalpath=%s", localPath))
+	if err != nil {
+		return fmt.Errorf("error linking %s to %s. output: %s, err: %v", remotePath, localPath, string(output), err)
+	}
+
+	return nil
+}
+
+// Mount just creates a soft link at target pointing to source.
+func (mounter *csiProxyMounter) Mount(source string, target string, fstype string, options []string) error {
+	klog.V(4).Infof("Mount: old name: %s. new name: %s", source, target)
+	source = normalizeWindowsPath(source, false)
+	target = normalizeWindowsPath(target, false)
+	if err := mounter.Rmdir(target); err != nil {
+		// PHani: klog.V(4).Infof("Mount: rmdir failed to remove target dir %s, %v", target, err)
+		//return err
+		klog.V(4).Infof("Mount: Rmdir on target %s returned %v", target, err)
+	}
+	klog.V(4).Infof("Mount: Symlink from source[%s] target [%s]", source, target)
+	err := os.Symlink(source, target)
+	if err != nil {
+		klog.V(4).Infof("Mount: symlink failed for  [%s] to [%s]", source, target, err)
+		klog.V(4).Infof("Mount: Trying mklink")
+		cmd := exec.Command("cmd", "/c", "mklink", "/D", target, source)
+		_, err = cmd.CombinedOutput()
+		if err != nil {
+			klog.V(4).Infof("Mount: mlinked failed for  [%s] to [%s]", source, target, err)
+			return err
+		}
+	}
+	return err
+}
+
 func Split(r rune) bool {
-	return r == ' ' || r == '/'
+	return r == ' ' || r == '/' || r == '\\'
 }
 
 // Rmdir - delete the given directory
@@ -708,12 +795,8 @@ func Split(r rune) bool {
 //	rmdir with either pod or plugin context.
 func (mounter *csiProxyMounter) Rmdir(path string) error {
 	klog.V(4).Infof("Remove directory: %s", path)
-	rmdirRequest := &fs.RmdirRequest{
-		Path:  normalizeWindowsPath(path),
-		Force: true,
-	}
-	_, err := mounter.FsClient.Rmdir(context.Background(), rmdirRequest)
-	if err != nil {
+	err := os.Remove(path)
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
@@ -739,22 +822,14 @@ func (mounter *csiProxyMounter) IsMountPointMatch(mp mount.MountPoint, dir strin
 //	path is checked.
 func (mounter *csiProxyMounter) IsLikelyNotMountPoint(path string) (bool, error) {
 	klog.V(4).Infof("IsLikelyNotMountPoint: %s", path)
-	isExists, err := mounter.ExistsPath(path)
-	if err != nil {
-		return false, err
+	info, err := os.Stat(normalizeWindowsPath(path, false))
+	if err == nil {
+		return os.ModeSymlink&info.Mode() != os.ModeSymlink, nil
 	}
-	if !isExists {
+	if os.IsNotExist(err) {
 		return true, os.ErrNotExist
 	}
-
-	response, err := mounter.FsClient.IsSymlink(context.Background(),
-		&fs.IsSymlinkRequest{
-			Path: normalizeWindowsPath(path),
-		})
-	if err != nil {
-		return false, err
-	}
-	return !response.IsSymlink, nil
+	return false, err
 }
 
 func (mounter *csiProxyMounter) PathIsDevice(pathname string) (bool, error) {
@@ -782,49 +857,28 @@ func (mounter *csiProxyMounter) MakeFile(pathname string) error {
 // with Plugin context..
 func (mounter *csiProxyMounter) MakeDir(path string) error {
 	klog.V(4).Infof("Make directory: %s", path)
-	mkdirReq := &fs.MkdirRequest{
-		Path: normalizeWindowsPath(path),
-	}
-	_, err := mounter.FsClient.Mkdir(context.Background(), mkdirReq)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return os.MkdirAll(path, 0750)
 }
 
 // ExistsPath - Checks if a path exists. Unlike util ExistsPath, this call does not perform follow link.
 func (mounter *csiProxyMounter) ExistsPath(path string) (bool, error) {
 	klog.V(4).Infof("Exists path: %s", path)
-	isExistsResponse, err := mounter.FsClient.PathExists(context.Background(),
-		&fs.PathExistsRequest{
-			Path: normalizeWindowsPath(path),
-		})
-	if err != nil {
-		return false, err
+	_, err := os.Stat(normalizeWindowsPath(path, false))
+	if err == nil {
+		return true, nil
 	}
-	return isExistsResponse.Exists, err
-}
-
-// GetAPIVersions returns the versions of the client APIs this mounter is using.
-func (mounter *csiProxyMounter) GetAPIVersions() string {
-	return fmt.Sprintf(
-		"API Versions filesystem: %s, SMB: %s",
-		fsclient.Version,
-		smbclient.Version,
-	)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 func (mounter *csiProxyMounter) EvalHostSymlinks(pathname string) (string, error) {
-	return "", fmt.Errorf("EvalHostSymlinks not implemented for CSIProxyMounter")
+	return filepath.EvalSymlinks(pathname)
 }
 
 func (mounter *csiProxyMounter) GetMountRefs(pathname string) ([]string, error) {
 	return []string{}, fmt.Errorf("GetMountRefs not implemented for CSIProxyMounter")
-}
-
-func (mounter *csiProxyMounter) GetFSGroup(pathname string) (int64, error) {
-	return -1, fmt.Errorf("GetFSGroup not implemented for CSIProxyMounter")
 }
 
 func (mounter *csiProxyMounter) GetSELinuxSupport(pathname string) (bool, error) {
@@ -847,22 +901,331 @@ func (mounter *csiProxyMounter) MountSensitiveWithoutSystemdWithMountFlags(sourc
 	return mounter.MountSensitive(source, target, fstype, options, sensitiveOptions /* sensitiveOptions */)
 }
 
+// NFS Extensions
+func (mounter *csiProxyMounter) AddDrive(
+	volid string,
+	share_path string,
+	sensitiveMountOptions []string,
+	csimode string,
+) error {
+
+	klog.V(2).Infof("AddDrive: volid %s, target %s, sensitiveOpts %v",
+		volid, share_path, sensitiveMountOptions)
+
+	volName := volid
+	cmdLine := fmt.Sprintf(`New-PSDrive -Name ${Env:volid} -PSProvider FileSystem ` +
+		`-Root ${Env:path} -Scope Global -Description ${Env:pwxtag}`)
+
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volid=%s", volName),
+		fmt.Sprintf("path=%s", share_path),
+		fmt.Sprintf("pwxtag=%s", pwxtag))
+	if err != nil {
+		klog.V(2).Infof("AddDrive: volid %s, cmd %v, failed %v", volid, cmdLine, err)
+		return fmt.Errorf("error nfs mounting. cmd %s, output %s. err %v", cmdLine, string(out), err)
+	}
+
+	workPath := volumePath(volid)
+	_, err = os.Stat(workPath)
+	if os.IsNotExist(err) {
+		cmdLine = fmt.Sprintf("mklink /D %s %s", workPath, share_path)
+		_, out, err = RunCmd(cmdLine)
+		if err != nil {
+			klog.V(2).Infof("AddDrive MkVolume: volid %s, failed %v", volid, err)
+			return fmt.Errorf("error mkvolume. cmd %s, output %s, err %v", cmdLine, string(out), err)
+		}
+	}
+
+	return nil
+}
+
+func (mounter *csiProxyMounter) RmDrive(
+	volid string,
+) error {
+	// cleanup can never fail, just log and continue
+	err := mounter.rmVolume(volid)
+	if err != nil {
+		klog.V(2).Infof("RmVolume(volid=%s) failed %v", volid, err)
+	}
+
+	klog.V(2).Infof("RmDrive: volid %s", volid)
+	cmdLine := fmt.Sprintf(`Remove-PSDrive -Name ${Env:volid}`)
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volid=%s", volid))
+	if err != nil {
+		klog.V(2).Infof("RmDrive: volid %s, cmd %v, failed %s/%v", volid, cmdLine, string(out), err)
+	}
+	return nil
+}
+
+func (mounter *csiProxyMounter) DriveInfo(
+	volid string,
+) (*DriveInfoObj, bool, error) {
+	klog.V(2).Infof("DriveInfo: volid %s", volid)
+
+	// Lookup will always fail as the New-PSDrive creates a temporary drive for the session.
+	// Will not be available for global lookup
+
+	// runs:
+	// ConvertTo-Json -InputObject @(Get-PSDrive -Name Public -ErrorAction Ignore)
+	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(Get-PSDrive -Name ${Env:volid} -ErrorAction Ignore)`)
+	out, stderr, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volid=%s", volid))
+	if err != nil {
+		klog.V(2).Infof("DriveInfo: volid %s, cmd %v, failed %v", volid, cmdLine, err)
+		return nil, false, fmt.Errorf("error driveinfo. cmd %s, output %s, err %v", cmdLine, string(stderr), err)
+	}
+
+	var d []DriveInfoObj
+	err = json.Unmarshal(out, &d)
+	if err != nil {
+		klog.V(2).Infof("DriveInfo: volid %s, parse failed %v", volid, err)
+		return nil, false, fmt.Errorf("error parsing driveinfo. out %v, err %v", out, err)
+	}
+
+	if len(d) == 0 {
+		return nil, false, nil
+	}
+
+	for _, drv := range d {
+		if drv.Name == volid && drv.Description == pwxtag {
+			return &drv, true, nil
+		}
+	}
+
+	return nil, false, nil
+}
+
+func (mounter *csiProxyMounter) DriveExists(
+	volid string,
+) (bool, error) {
+	klog.V(2).Infof("DriveExists: volid %s", volid)
+
+	_, ok, err := mounter.DriveInfo(volid)
+
+	return ok, err
+}
+
+func (mounter *csiProxyMounter) mkVolume(volid string) error {
+	// runs:
+	// New-item -Path c:\myvol\vol1 -ItemType SymbolicLink -Value 615688357680565115: - This does not work
+	// use cli: cmd.exe /c "mklink /D c:\pwxvol\615688357680565485  \\10.13.197.205\var\lib\osd\pxns\615688357680565485"
+	klog.V(2).Infof("MkVolume: volid %s", volid)
+
+	workPath := volumePath(volid)
+	psdrive := volid + ":"
+
+	cmdLine := "New-Item -Path ${Env:workPath} -ItemType SymbolicLink -Value ${Env:psdrive}"
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("workPath=%s", workPath),
+		fmt.Sprintf("psdrive=%s", psdrive))
+	if err != nil {
+		klog.V(2).Infof("MkVolume: volid %s, failed %v", volid, err)
+		return fmt.Errorf("error mkvolume. cmd %s, output %s, err %v", cmdLine, string(out), err)
+	}
+
+	return nil
+}
+
+func (mounter *csiProxyMounter) MkLink(volid, target string) error {
+	// runs:
+	// New-item -Path c:\myvol\vol1 -ItemType SymbolicLink -Value c:\pwxvol\615688357680565115
+	klog.V(2).Infof("MkLink: volid %s, target %s", volid, target)
+
+	// internal work dir path for mounted volume
+	workPath := volumePath(volid)
+
+	cmdLine := fmt.Sprintf("New-Item -Path ${Env:target} -ItemType SymbolicLink -Value ${Env:workPath}")
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("workPath=%s", workPath), fmt.Sprintf("target=%s", target))
+	if err != nil {
+		klog.V(2).Infof("MkLink: volid %s, target %s, failed %v", volid, target, err)
+		return fmt.Errorf("error mkvolume. cmd %s, output %s, err %v", cmdLine, string(out), err)
+	}
+
+	return nil
+}
+
+func (mounter *csiProxyMounter) RmLink(volid, target string) error {
+	// runs:
+	// Remove-item does not properly remove symlinks, use os.Remove and see if it work
+	klog.V(2).Infof("RmLink: volid %s, target %s", volid, target)
+
+	err := os.Remove(target)
+	if err != os.ErrNotExist {
+		klog.V(2).Infof("RmLink: volid %s, target %s, failed %v", volid, target, err)
+		return err
+	}
+
+	return nil
+}
+
+func (mounter *csiProxyMounter) rmVolume(volid string) error {
+	klog.V(2).Infof("RmVolume: volid %s", volid)
+
+	path := volumePath(volid)
+	return mounter.RmLink(volid, path)
+}
+
+func (mounter *csiProxyMounter) NfsMount(
+	source, target, fstype string,
+	mountOptions, sensitiveMountOptions []string,
+) error {
+	klog.V(2).Infof("NfsMount: remote path: %s local path: %s", source, target)
+
+	klog.V(2).Infof("NfsMount: other args fsType %s, options %v, %v",
+		fstype, mountOptions, sensitiveMountOptions)
+
+	// check if the temp workDir exists, if not create it.
+	exists, err := mounter.ExistsPath(workDir)
+	if err != nil {
+		return fmt.Errorf("work dir: %s exist check failed with err: %v", workDir, err)
+	}
+
+	if !exists {
+		klog.V(2).Infof("work directory %s does not exists. Creating the directory", workDir)
+		if err := mounter.MakeDir(workDir); err != nil {
+			return fmt.Errorf("create of work dir: %s failed with error: %v", workDir, err)
+		}
+	}
+	parentDir := filepath.Dir(target)
+	parentExists, err := mounter.ExistsPath(parentDir)
+	if err != nil {
+		return fmt.Errorf("parent dir: %s exist check failed with err: %v", parentDir, err)
+	}
+
+	if !parentExists {
+		klog.V(2).Infof("Parent directory %s does not exists. Creating the directory", parentDir)
+		if err := mounter.MakeDir(parentDir); err != nil {
+			return fmt.Errorf("create of parent dir: %s dailed with error: %v", parentDir, err)
+		}
+	}
+
+	source = normalizeWindowsPath(source, true)
+	parts := strings.FieldsFunc(source, Split)
+	if len(parts) > 0 && strings.HasSuffix(parts[0], "svc.cluster.local") {
+		domainName := parts[0]
+		klog.V(2).Infof("begin to replace hostname(%s) with IP for source(%s)", domainName, source)
+		ip, err := net.ResolveIPAddr("ip4", domainName)
+		if err != nil {
+			klog.Warningf("could not resolve name to IPv4 address for host %s, failed with error: %v", domainName, err)
+		} else {
+			klog.V(2).Infof("resolve the name of host %s to IPv4 address: %s", domainName, ip.String())
+			source = strings.Replace(source, domainName, ip.String(), 1)
+		}
+	}
+
+	klog.V(2).Infof("norm source %v, split %+v", source, parts)
+
+	// 'source' path has to be of form: //<ip>/var/lib/osd/mounts/<volid>
+	host := parts[0]
+	volid := parts[len(parts)-1]
+	// sharename := volid
+
+	unlock := lock(volid)
+	defer unlock()
+
+	normalizedTarget := normalizeWindowsPath(target, false)
+
+	created := false
+	if ok, err := mounter.DriveExists(volid); err != nil {
+		return err
+	} else if !ok {
+		klog.V(2).Infof("begin to add drive vol %s, from %s on %s", volid, source, normalizedTarget)
+		err := mounter.AddDrive(volid, source, nil, "nfs")
+
+		if err != nil {
+			return err
+		}
+		created = true
+	}
+
+	if err := mounter.MkLink(volid, normalizedTarget); err != nil {
+		if created {
+			if err2 := mounter.RmDrive(volid); err2 != nil {
+				klog.V(2).Infof("cleanup drive vol %s failed %v", volid, err2)
+			}
+		}
+		return err
+	}
+
+	tmpPath := fmt.Sprintf("%s%s", volumePath(volid), "nfs")
+	klog.V(2).Infof("AddDrive Creating file %s", tmpPath)
+	if emptyfile, err2 := os.Create(tmpPath); err2 != nil {
+		klog.V(4).Infof("Unable to create tmppath %s %v", volid, err2)
+	} else {
+		emptyfile.Close()
+	}
+
+	if err := incementRemotePathReferencesCount(volid, host); err != nil {
+		return fmt.Errorf("incementMappingPathCount(%s, %s) failed with error: %v", volid, host, err)
+	}
+	return nil
+}
+
+func (mounter *csiProxyMounter) NfsUnmount(volumeId string, target string) error {
+	klog.V(4).Infof("Unmount: local path: %s", target)
+	workPath := volumePath(volumeId)
+	tmpPath := fmt.Sprintf("%s%s", workPath, "nfs")
+	_, err := os.Stat(tmpPath)
+	if os.IsNotExist(err) {
+		tmpPath = fmt.Sprintf("%s%s", workPath, "smb")
+		_, err := os.Stat(tmpPath)
+		if err == nil {
+			ret := mounter.SMBUnmount(target)
+			os.Remove(tmpPath)
+			return ret
+		}
+		tmpPath = fmt.Sprintf("%s%s", workPath, "nfs")
+	} else {
+		klog.V(4).Infof("Unmount: Successful stat of  tmpPath: %s", tmpPath)
+	}
+
+	// Proceed with Nfs Unmount.
+	klog.V(4).Infof("NfsUnmount: local path: %s", target)
+
+	if remotePath, err := os.Readlink(target); err != nil {
+		klog.Warningf("NfsUnmount: can't get remote path: %v", err)
+	} else {
+		if tmpRemotePath, err := os.Readlink(remotePath); err != nil {
+			klog.Infof("NfsUnmount: Reading link for remotePath %s failed %v", remotePath, err)
+		} else {
+			klog.Warningf("NfsUnmount: tmp remote path: %v", tmpRemotePath)
+			tmpRemotePath = strings.TrimSuffix(tmpRemotePath, "\\")
+			parts := strings.FieldsFunc(tmpRemotePath, Split)
+			volid := parts[len(parts)-1]
+			host := parts[0]
+
+			klog.V(4).Infof("NfsUnmount: remote path: %s, mapping path: %s, host %s", tmpRemotePath, volid, host)
+
+			unlock := lock(volid)
+			defer unlock()
+
+			if err := decrementRemotePathReferencesCount(volid, host); err != nil {
+				klog.Warningf("NfsUnmount: decrementMappingPathCount(%s, %s) failed with error: %v", volid, host, err)
+			} else {
+				count := getRemotePathReferencesCount(volid)
+				if count == 0 {
+					klog.V(2).Infof("begin to Unmount volume %s on %s", remotePath, target)
+					mounter.RmLink(volid, target)
+					mounter.rmVolume(volid)
+					mounter.RmDrive(volid)
+					os.Remove(tmpPath)
+					return nil
+				} else {
+					klog.Infof("NfsUnmount: found %d links to %s", count, volid)
+				}
+			}
+		}
+	}
+
+	err = mounter.Rmdir(target)
+	if err != nil {
+		klog.Warningf("NfsUnmount: rmdir %s, failed %s", target, err)
+	}
+	return nil
+}
+
 // NewSmbCSIProxyMounter - creates a new CSI Proxy mounter struct which encompassed all the
 // clients to the CSI proxy - filesystem, disk and volume clients.
 func NewSmbCSIProxyMounter(removeSMBMappingDuringUnmount bool) (*csiProxyMounter, error) {
-	fsClient, err := fsclient.NewClient()
-	if err != nil {
-		return nil, err
-	}
-	smbClient, err := smbclient.NewClient()
-	if err != nil {
-		return nil, err
-	}
-
 	return &csiProxyMounter{
-		Mode:                          common.DriverModeSmb,
-		FsClient:                      fsClient,
-		SMBClient:                     smbClient,
+		Mode:                          common.DriverModeFlagSmb,
 		RemoveSMBMappingDuringUnmount: removeSMBMappingDuringUnmount,
 	}, nil
 }
@@ -870,10 +1233,14 @@ func NewSmbCSIProxyMounter(removeSMBMappingDuringUnmount bool) (*csiProxyMounter
 // NewIscsiCSIProxyMounter - creates a new CSI Proxy mounter struct which provides the wrapper over
 // needed iscsi operations.
 func NewIscsiCSIProxyMounter() (*csiProxyMounter, error) {
-	return &csiProxyMounter{Mode: common.DriverModeIscsi}, nil
+	return &csiProxyMounter{Mode: common.DriverModeFlagIscsi}, nil
 }
 
-func NewSafeMounter(mode common.DriverMode, removeSMBMappingDuringUnmount bool) (*mount.SafeFormatAndMount, error) {
+func NewNfsCSIProxyMounter() (*csiProxyMounter, error) {
+	return &csiProxyMounter{Mode: common.DriverModeFlagNfs, RemoveSMBMappingDuringUnmount: true}, nil
+}
+
+func NewSafeMounter(mode string, removeSMBMappingDuringUnmount bool) (*mount.SafeFormatAndMount, error) {
 	var csiProxyMounter *csiProxyMounter
 	var err error
 
@@ -883,16 +1250,23 @@ func NewSafeMounter(mode common.DriverMode, removeSMBMappingDuringUnmount bool) 
 			klog.V(2).Infof("failed to connect to csi-proxy with error: %v", err)
 			return nil, err
 		}
-		klog.V(2).Infof("using SMB CSIProxyMounterV1, %s", csiProxyMounter.GetAPIVersions())
+		klog.V(2).Infof("using SMB CSIProxyMounterV1")
 	} else if mode == common.DriverModeIscsi {
 		csiProxyMounter, err = NewIscsiCSIProxyMounter()
 		if err != nil {
 			klog.V(2).Infof("failed to initialize iscsi mounter: %v", err)
 			return nil, err
 		}
-		klog.V(2).Infof("using ISCSI CSIProxyMounter, %s", csiProxyMounter.GetAPIVersions())
+		klog.V(2).Infof("using ISCSI CSIProxyMounterV1")
+	} else if mode == common.DriverModeNfs {
+		csiProxyMounter, err = NewNfsCSIProxyMounter()
+		if err != nil {
+			klog.V(2).Infof("failed to initialize nfs mounter: %v", err)
+			return nil, err
+		}
+		klog.V(2).Infof("using NFS CSIProxyMounterV1")
 	} else {
-		return nil, fmt.Errorf("unsupported driver mode %v", mode.String())
+		return nil, fmt.Errorf("unsupported driver mode %v", mode)
 	}
 
 	return &mount.SafeFormatAndMount{

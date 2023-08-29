@@ -26,7 +26,7 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/sulakshm/csi-driver/pkg/utils"
+	"github.com/portworx/windows-csi-driver/pkg/utils"
 
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
@@ -35,6 +35,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/portworx/windows-csi-driver/pkg/common"
 	"golang.org/x/net/context"
 )
 
@@ -124,7 +125,7 @@ func (d *smbDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolum
 		return nil, status.Error(codes.InvalidArgument, "Staging target not provided")
 	}
 
-	context := req.GetVolumeContext()
+	context := req.GetPublishContext()
 	mountFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
 	volumeMountGroup := req.GetVolumeCapability().GetMount().GetVolumeMountGroup()
 	secrets := req.GetSecrets()
@@ -134,21 +135,21 @@ func (d *smbDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolum
 	subDirReplaceMap := map[string]string{}
 	for k, v := range context {
 		switch strings.ToLower(k) {
-		case sourceField:
+		case common.SharePathField:
 			source = v
-		case subDirField:
+		case common.SubDirField:
 			subDir = v
-		case pvcNamespaceKey:
-			subDirReplaceMap[pvcNamespaceMetadata] = v
-		case pvcNameKey:
-			subDirReplaceMap[pvcNameMetadata] = v
-		case pvNameKey:
-			subDirReplaceMap[pvNameMetadata] = v
+		case common.PvcNamespaceKey:
+			subDirReplaceMap[common.PvcNamespaceMetadata] = v
+		case common.PvcNameKey:
+			subDirReplaceMap[common.PvcNameMetadata] = v
+		case common.PvNameKey:
+			subDirReplaceMap[common.PvNameMetadata] = v
 		}
 	}
 
 	if source == "" {
-		return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("%s field is missing, current context: %v", sourceField, context))
+		return nil, status.Error(codes.InvalidArgument, fmt.Sprintf("%s field is missing, current context: %v", common.SharePathField, context))
 	}
 
 	if acquired := d.volumeLocks.TryAcquire(volumeID); !acquired {
@@ -159,11 +160,11 @@ func (d *smbDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolum
 	var username, password, domain string
 	for k, v := range secrets {
 		switch strings.ToLower(k) {
-		case usernameField:
+		case common.UsernameField:
 			username = strings.TrimSpace(v)
-		case passwordField:
+		case common.PasswordField:
 			password = strings.TrimSpace(v)
-		case domainField:
+		case common.DomainField:
 			domain = strings.TrimSpace(v)
 		}
 	}
@@ -188,14 +189,14 @@ func (d *smbDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolum
 			return nil, status.Error(codes.Internal, fmt.Sprintf("MkdirAll %s failed with error: %v", targetPath, err))
 		}
 		if requireUsernamePwdOption {
-			sensitiveMountOptions = []string{fmt.Sprintf("%s=%s,%s=%s", usernameField, username, passwordField, password)}
+			sensitiveMountOptions = []string{fmt.Sprintf("%s=%s,%s=%s", common.UsernameField, username, common.PasswordField, password)}
 		}
 		mountOptions = mountFlags
 		if !gidPresent && volumeMountGroup != "" {
 			mountOptions = append(mountOptions, fmt.Sprintf("gid=%s", volumeMountGroup))
 		}
 		if domain != "" {
-			mountOptions = append(mountOptions, fmt.Sprintf("%s=%s", domainField, domain))
+			mountOptions = append(mountOptions, fmt.Sprintf("%s=%s", common.DomainField, domain))
 		}
 	}
 

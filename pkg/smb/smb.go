@@ -24,26 +24,14 @@ import (
 	"k8s.io/klog/v2"
 	mount "k8s.io/mount-utils"
 
-	csicommon "github.com/sulakshm/csi-driver/pkg/csi-common"
-	utils "github.com/sulakshm/csi-driver/pkg/utils"
-	"github.com/sulakshm/csi-driver/pkg/mounter"
-	"github.com/sulakshm/csi-driver/pkg/common"
+	"github.com/portworx/windows-csi-driver/pkg/common"
+	csicommon "github.com/portworx/windows-csi-driver/pkg/csi-common"
+	"github.com/portworx/windows-csi-driver/pkg/mounter"
+	utils "github.com/portworx/windows-csi-driver/pkg/utils"
 )
 
 const (
-	usernameField        = "username"
-	passwordField        = "password"
-	sourceField          = "source"
-	subDirField          = "subdir"
-	domainField          = "domain"
-	mountOptionsField    = "mountoptions"
-	defaultDomainName    = "AZURE"
-	pvcNameKey           = "csi.storage.k8s.io/pvc/name"
-	pvcNamespaceKey      = "csi.storage.k8s.io/pvc/namespace"
-	pvNameKey            = "csi.storage.k8s.io/pv/name"
-	pvcNameMetadata      = "${pvc.metadata.name}"
-	pvcNamespaceMetadata = "${pvc.metadata.namespace}"
-	pvNameMetadata       = "${pv.metadata.name}"
+	defaultDomainName = "AZURE"
 )
 
 // smbDriver implements all interfaces of CSI drivers
@@ -73,7 +61,7 @@ func NewDriver(name, version string, options *common.DriverOptions) *smbDriver {
 	}
 
 	driver.removeSMBMappingDuringUnmount = options.SmbOpts.RemoveSMBMappingDuringUnmount
-	driver.workingMountDir = options.SmbOpts.WorkingMountDir
+	driver.workingMountDir = options.WorkDir
 
 	driver.volumeLocks = utils.NewVolumeLocks()
 
@@ -124,8 +112,8 @@ func (d *smbDriver) GetNodeServer() csi.NodeServer {
 	return d
 }
 
-func (d *smbDriver) GetMode() common.DriverMode {
-	return common.DriverModeSmb
+func (d *smbDriver) GetMode() common.DriverModeFlag {
+	return common.DriverModeFlagSmb
 }
 
 // Init driver initialization
@@ -141,7 +129,7 @@ func IsCorruptedDir(dir string) bool {
 func getMountOptions(context map[string]string) string {
 	for k, v := range context {
 		switch strings.ToLower(k) {
-		case mountOptionsField:
+		case common.MountOptionsField:
 			return v
 		}
 	}

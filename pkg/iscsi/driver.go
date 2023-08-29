@@ -21,11 +21,11 @@ import (
 	"os"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/sulakshm/csi-driver/pkg/common"
-	csicommon "github.com/sulakshm/csi-driver/pkg/csi-common"
+	"github.com/portworx/windows-csi-driver/pkg/common"
+	csicommon "github.com/portworx/windows-csi-driver/pkg/csi-common"
 	klog "k8s.io/klog/v2"
 
-	"github.com/sulakshm/csi-driver/pkg/mounter"
+	"github.com/portworx/windows-csi-driver/pkg/mounter"
 	mount "k8s.io/mount-utils"
 )
 
@@ -42,13 +42,13 @@ var driverName string
 func NewDriver(name, version string, options *common.DriverOptions) *iscsiDriver {
 	d := iscsiDriver{}
 	klog.V(1).Infof("iscsiDriver: %s version: %s nodeID: %s endpoint: %s", name, version, options.NodeID,
-		options.IscsiOpts.Endpoint)
+		options.Endpoint)
 
 	d.Name = name
 	d.Version = version
 	d.NodeID = options.NodeID
 	d.enableGetVolumeStats = options.EnableGetVolumeStats
-	d.endpoint = options.IscsiOpts.Endpoint
+	d.endpoint = options.Endpoint
 
 	driverName = name
 
@@ -84,8 +84,8 @@ func NewDriver(name, version string, options *common.DriverOptions) *iscsiDriver
 	return &d
 }
 
-func (d *iscsiDriver) GetMode() common.DriverMode {
-	return common.DriverModeIscsi
+func (d *iscsiDriver) GetMode() common.DriverModeFlag {
+	return common.DriverModeFlagIscsi
 }
 
 func (d *iscsiDriver) Init() {

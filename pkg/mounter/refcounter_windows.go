@@ -94,12 +94,18 @@ func incementRemotePathReferencesCount(mappingPath, remotePath string) error {
 // See incementRemotePathReferencesCount to understand how references work.
 func decrementRemotePathReferencesCount(mappingPath, remotePath string) error {
 	remotePath = strings.TrimSuffix(remotePath, "\\")
+	mappingPath = strings.TrimPrefix(mappingPath, "\\\\c:\\")
 	path := filepath.Join(basePath, strings.TrimPrefix(mappingPath, "\\\\"))
-	if err := os.MkdirAll(path, os.ModeDir); err != nil {
+	err := os.MkdirAll(path, os.ModeDir)
+	if err != nil && !os.IsExist(err) {
 		return err
 	}
 	filePath := filepath.Join(path, getMd5(remotePath))
-	return os.Remove(filePath)
+	err = os.Remove(filePath)
+	if err != nil && os.IsNotExist(err) {
+		err = nil
+	}
+	return err
 }
 
 // getRemotePathReferencesCount - returns count of references between mappingPath and remotePath.

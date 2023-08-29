@@ -13,7 +13,7 @@
 # limitations under the License.
 
 CMDS=pxplugin
-PKG = github.com/sulakshm/csi-driver
+PKG = github.com/portworx/windows-csi-driver
 GINKGO_FLAGS = -ginkgo.v
 GO111MODULE = on
 GOPATH ?= $(shell go env GOPATH)
@@ -25,9 +25,9 @@ export GOPATH GOBIN GO111MODULE DOCKER_CLI_EXPERIMENTAL
 include release-tools/build.make
 
 GIT_COMMIT ?= $(shell git rev-parse HEAD)
-REGISTRY ?= docker.io/sulakshm
+REGISTRY ?= docker.io/portworx/windows-csi-driver
 REGISTRY_NAME = $(shell echo $(REGISTRY) | sed "s/.azurecr.io//g")
-IMAGE_VERSION ?= v0.1.wip
+IMAGE_VERSION ?= v0.1.pxwindriver
 VERSION ?= latest
 # Use a custom version for E2E tests if we are testing in CI
 ifdef CI
