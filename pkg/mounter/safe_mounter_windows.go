@@ -925,11 +925,14 @@ func (mounter *csiProxyMounter) AddDrive(
 	}
 
 	workPath := volumePath(volid)
-	cmdLine = fmt.Sprintf("mklink /D %s %s", workPath, share_path)
-	_, out, err = RunCmd(cmdLine)
-	if err != nil {
-		klog.V(2).Infof("AddDrive MkVolume: volid %s, failed %v", volid, err)
-		return fmt.Errorf("error mkvolume. cmd %s, output %s, err %v", cmdLine, string(out), err)
+	_, err = os.Stat(workPath)
+	if os.IsNotExist(err) {
+		cmdLine = fmt.Sprintf("mklink /D %s %s", workPath, share_path)
+		_, out, err = RunCmd(cmdLine)
+		if err != nil {
+			klog.V(2).Infof("AddDrive MkVolume: volid %s, failed %v", volid, err)
+			return fmt.Errorf("error mkvolume. cmd %s, output %s, err %v", cmdLine, string(out), err)
+		}
 	}
 
 	return nil
