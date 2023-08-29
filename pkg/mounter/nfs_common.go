@@ -27,8 +27,7 @@ type NfsMounter interface {
 	NfsMount(source, target, fsType string, mountOptions, sensitiveMountOptions []string) error
 	NfsUnmount(volumeId string, target string) error
 	AddDrive(volid string, sharePath string, sensitiveMountOptins []string, csimode string) error
-	RmDrive(volid string) error
-	DriveInfo(volid string) (*DriveInfoObj, bool, error)
+	RmDrive(volid string, targetPath string) error
 	DriveExists(volid string) (bool, error)
 	MkLink(volid, target string) error
 	RmLink(volid, target string) error
@@ -47,6 +46,7 @@ func (nfs *stubNfsMounter) AddDrive(
 
 func (nfs *stubNfsMounter) RmDrive(
 	volid string,
+	path string,
 ) error {
 	return errStubImpl
 }

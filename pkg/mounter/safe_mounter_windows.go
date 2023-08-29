@@ -24,17 +24,8 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"os/exec"
 	filepath "path/filepath"
-	"strconv"
 	"strings"
-	"time"
-
-	"k8s.io/apimachinery/pkg/util/wait"
-
-	iscsi "github.com/kubernetes-csi/csi-proxy/client/api/iscsi/v1alpha2"
-
-	smb "github.com/kubernetes-csi/csi-proxy/client/api/smb/v1"
 
 	"github.com/portworx/windows-csi-driver/pkg/common"
 	"k8s.io/klog/v2"
@@ -46,11 +37,8 @@ import (
 type CSIProxyMounter interface {
 	mount.Interface
 
-	IscsiMounter
 	NfsMounter
 
-	SMBMount(source, target, fsType string, mountOptions, sensitiveMountOptions []string) error
-	SMBUnmount(target string) error
 	MakeDir(path string) error
 	Rmdir(path string) error
 	IsMountPointMatch(mp mount.MountPoint, dir string) bool
@@ -73,715 +61,14 @@ func normalizeWindowsPath(path string, networkpath bool) string {
 	return normalizedPath
 }
 
-// / Iscsi specifics
-func (mounter *csiProxyMounter) IscsiAddTargetPortal(addr string, port uint32) error {
-	klog.V(2).Infof("IscsiAddTargetPortal: target addr: %v, target port: %d", addr, port)
-	// Runs: New-IscsiTargetPortal -TargetPortalAddress 10.13.111.125 -TargetPortalPortNumber 3260
-	cmdLine := fmt.Sprintf(
-		`New-IscsiTargetPortal -TargetPortalAddress ${Env:iscsi_tp_address} ` +
-			`-TargetPortalPortNumber ${Env:iscsi_tp_port}`)
-	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
-		fmt.Sprintf("iscsi_tp_port=%d", port))
-	if err != nil {
-		return fmt.Errorf("error adding target portal. cmd %s, output: %s, err: %v", cmdLine, string(out), err)
-	}
-
-	return nil
-}
-
-func (mounter *csiProxyMounter) refreshTargets() error {
-	cmdLine := "Update-IscsiTarget"
-	_, out, err := RunPowershellCmd(cmdLine)
-	if err != nil {
-		return fmt.Errorf("error running target refresh. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
-	}
-
-	return nil
-}
-
-func (mounter *csiProxyMounter) IscsiHasActiveSession(addr string, port uint32) (bool, error) {
-	// Runs:  Get-IscsiTargetPortal -TargetPortalAddress 10.13.111.120 -TargetPortalPortNumber 3260 | Get-IscsiSession
-	cmdLine := fmt.Sprintf(
-		`Get-IscsiTargetPortal -TargetPortalAddress ${Env:iscsi_tp_address} ` +
-			`-TargetPortalPortNumber ${Env:iscsi_tp_port} | Get-IscsiSession`)
-
-	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
-		fmt.Sprintf("iscsi_tp_port=%d", port))
-	if err != nil {
-		return false, fmt.Errorf("error checking for active session. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
-	}
-
-	// refresh target portal
-	mounter.refreshTargets()
-	return true, nil
-}
-
-func (mounter *csiProxyMounter) IscsiConnectTargetNoAuth(addr string, port uint32, iqn string) error {
-	klog.V(2).Infof("IscsiConnectTarget: target addr: %v, target port: %d, iqn: %s, auth: none", addr, port, iqn)
-
-	sessionOk, _ := mounter.IscsiHasActiveSession(addr, port)
-	if sessionOk {
-		klog.V(2).Infof("Using existing iscsi session for %s:%d\n", addr, port)
-		return nil
-	}
-
-	authType := "NONE" // AuthenticationType.None
-	chapUser := ""
-	chapSecret := ""
-
-	cmdLine := fmt.Sprintf(
-		`Connect-IscsiTarget -TargetPortalAddress ${Env:iscsi_tp_address}` +
-			` -TargetPortalPortNumber ${Env:iscsi_tp_port} -NodeAddress ${Env:iscsi_target_iqn}` +
-			` -AuthenticationType ${Env:iscsi_auth_type}`)
-
-	// not setting chapUser/chapSecrets
-	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
-		fmt.Sprintf("iscsi_tp_port=%d", port),
-		fmt.Sprintf("iscsi_target_iqn=%s", iqn),
-		fmt.Sprintf("iscsi_auth_type=%s", authType),
-		fmt.Sprintf("iscsi_chap_user=%s", chapUser),
-		fmt.Sprintf("iscsi_chap_secret=%s", chapSecret))
-	if err != nil {
-		return fmt.Errorf("error connecting to target portal. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
-	}
-
-	return nil
-}
-
-func (mounter *csiProxyMounter) IscsiDisconnectTarget(iqn string) error {
-	// Runs: Disconnect-IscsiTarget -NodeAddress $Target.NodeAddress
-	cmdLine := fmt.Sprintf(`Disconnect-IscsiTarget -NodeAddress ${Env:iscsi_target_iqn} -Confirm:$false`)
-	var lastError error
-
-	// need retry to get session cleared
-	f := func() (bool, error) {
-		klog.V(2).Infof("IscsiDisconnectTarget: target iqn: %s", iqn)
-		_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_target_iqn=%s", iqn))
-		if err != nil {
-			lastError = fmt.Errorf("error disconnecting target. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
-			return false, nil
-		}
-		lastError = nil
-		return true, nil
-	}
-
-	err := wait.ExponentialBackoff(
-		wait.Backoff{
-			Duration: 200 * time.Millisecond,
-			Factor:   1.2,
-			Steps:    10,
-			Cap:      1 * time.Second,
-		}, f,
-	)
-
-	if err != nil {
-		return err
-	}
-
-	return lastError
-}
-
-func (mounter *csiProxyMounter) IscsiDiscoverTargetPortal(addr string, port uint32) ([]string, error) {
-	klog.V(2).Infof("IscsiDiscoverTargetPortal: target addr: %v, target port: %d", addr, port)
-	// ConvertTo-Json is not part of the pipeline because powershell converts an
-	// array with one element to a single element
-	cmdLine := fmt.Sprintf(
-		`ConvertTo-Json -InputObject @(Get-IscsiTargetPortal -TargetPortalAddress ` +
-			`${Env:iscsi_tp_address} -TargetPortalPortNumber ${Env:iscsi_tp_port} | ` +
-			`Get-IscsiTarget | Select-Object -ExpandProperty NodeAddress)`)
-	out, stderr, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr),
-		fmt.Sprintf("iscsi_tp_port=%d", port))
-	if err != nil {
-		return nil, fmt.Errorf("error discovering target portal. cmd: %s, output: %s, err: %w", cmdLine, string(stderr), err)
-	}
-
-	var iqns []string
-	err = json.Unmarshal(out, &iqns)
-	if err != nil {
-		return nil, fmt.Errorf("failed parsing iqn list. cmd: %s output: %s, err: %w", cmdLine, string(out), err)
-	}
-
-	return iqns, nil
-}
-
-func (mounter *csiProxyMounter) IscsiListTargetPortals() ([]iscsi.TargetPortal, error) {
-	klog.V(2).Infof("IscsiListTargetPortals requested")
-	cmdLine := fmt.Sprintf(
-		`ConvertTo-Json -InputObject @(Get-IscsiTargetPortal | ` +
-			`Select-Object TargetPortalAddress, TargetPortalPortNumber)`)
-
-	out, stderr, err := RunPowershellCmd(cmdLine)
-	if err != nil {
-		return nil, fmt.Errorf("error listing target portals. cmd %s, output: %s, err: %w", cmdLine, string(stderr), err)
-	}
-
-	var portals []iscsi.TargetPortal
-	err = json.Unmarshal(out, &portals)
-	if err != nil {
-		return nil, fmt.Errorf("failed parsing target portal list. cmd: %s output: %s, err: %w", cmdLine, string(out), err)
-	}
-
-	return portals, nil
-}
-
-func (mounter *csiProxyMounter) IscsiRemoveTargetPortal(addr string, port uint32) error {
-	klog.V(2).Infof("IscsiRemoveTargetPortal: target addr: %v, target port: %d", addr, port)
-	// Runs: Remove-IscsiTargetPortal -TargetPortalAddress 10.13.111.125 -TargetPortalPortNumber 3260 -Confirm:$false
-	cmdLine := fmt.Sprintf(`Remove-IscsiTargetPortal -TargetPortalAddress ${Env:iscsi_tp_address} ` +
-		`-TargetPortalPortNumber ${Env:iscsi_tp_port} -Confirm:$false`)
-
-	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("iscsi_tp_address=%s", addr), fmt.Sprintf("iscsi_tp_port=%d", port))
-	if err != nil {
-		return fmt.Errorf("error connecting to target portal. cmd %s, output: %s, err: %w", cmdLine, string(out), err)
-	}
-
-	return nil
-}
-
-// /IscsiVolumeExists implies volume formatted and ready to use.
-func (mounter *csiProxyMounter) IscsiVolumeExists(fsLabel string) (bool, error) {
-	type VolumeInfo struct {
-		OperationalStatus string
-		HealthStatus      string
-		FileSystemType    string
-	}
-
-	var volumes []VolumeInfo
-	// Runs: Get-Volume -FilesystemLabel 398649739277880943
-	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(Get-Volume -FilesystemLabel ${Env:fs_label} | ` +
-		`Select-Object OperationalStatus,HealthStatus,FilesystemType)`)
-
-	out, stderr, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fsLabel))
-	if err != nil {
-		return false, fmt.Errorf("error listing volumes. cmd %s, output: %s, err: %w", cmdLine, string(stderr), err)
-	}
-
-	klog.V(2).Infof("IscsiVolumeExists found volume with fs label %v - with properties %v", fsLabel, string(out))
-	err = json.Unmarshal(out, &volumes)
-	if err != nil {
-		return false, err
-	}
-
-	if len(volumes) == 0 {
-		klog.Warningf("IscsiVolumeExists did not find any volume for label %v", fsLabel)
-		return false, nil
-	}
-
-	if len(volumes) != 1 {
-		klog.Warningf("IscsiVolumeExists found multiple volumes(%v) - unexpected", volumes)
-	}
-	vol := volumes[0]
-	if vol.OperationalStatus != "OK" || vol.HealthStatus != "Healthy" || vol.FileSystemType != "NTFS" {
-		klog.Warningf("IscsiVolumeExists found volume state inconsistent - %+v", vol)
-		return false, ErrVolumeInconsistent
-	}
-
-	return true, nil
-}
-
-func (mounter *csiProxyMounter) IscsiDiskInitialized(serialnum string) (bool, error) {
-	// Runs:  Get-Disk -SerialNumber serialnum | select-object PartitionStyle
-	// expected: GPT or RAW.
-	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(` +
-		`Get-Disk -SerialNumber ${Env:disk_serial_number} | Select-Object PartitionStyle)`)
-
-	out, stderr, err := RunPowershellCmd(cmdLine, fmt.Sprintf("disk_serial_number=%s", serialnum))
-	if err != nil {
-		klog.V(2).Infof("error checking disk status. cmd %s, output: %s, err: %w", cmdLine, string(stderr), err)
-		return false, fmt.Errorf("error checking disk status. cmd %s, output: %s, err: %w", cmdLine, string(stderr), err)
-	}
-
-	type diskInfo struct {
-		PartitionStyle string
-	}
-
-	var di []diskInfo
-	if err := json.Unmarshal(out, &di); err != nil {
-		klog.V(2).Infof("error parsing %v, error %v", string(out), err)
-		return false, err
-	}
-
-	if len(di) == 0 {
-		klog.V(2).Infof("disk with serialnum %v - not found", serialnum)
-		return false, ErrNoSuchDisk
-	}
-
-	if len(di) != 1 {
-		klog.Warningf("IscsiDiskInitialized found multiple disks(%v) - unexpected", di)
-	}
-
-	ps := di[0].PartitionStyle
-
-	klog.V(2).Infof("partitionStyle found disk with serialnumber %v - with partitionstyle %v", serialnum, ps)
-	raw := strings.Contains(ps, "RAW")
-	return !raw, nil
-}
-
-func (mounter *csiProxyMounter) IscsiDiskInit(serialnum string) error {
-	// Runs: Initialize-Disk -PartitionStyle GPT
-	cmdLine := fmt.Sprintf(`Get-Disk -SerialNumber ${Env:disk_serial_number} | Initialize-Disk -PartitionStyle GPT`)
-
-	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("disk_serial_number=%s", serialnum))
-	if err != nil {
-		return fmt.Errorf("error initializing disk: cmd %s, output: %s, err: %w", cmdLine, string(out), err)
-	}
-
-	return nil
-}
-
-func (mounter *csiProxyMounter) IscsiFormatVolume(serialnum, fslabel string) error {
-	// Runs:  Initialize-Disk and creates a new data partition for use
-
-	// retry loop until disk appears
-	f := func() (bool, error) {
-		klog.V(2).Infof("finding disk with serialnum %v\n", serialnum)
-		ok, err := mounter.IscsiDiskInitialized(serialnum)
-		if err == ErrNoSuchDisk {
-			return false, nil
-		}
-		if err != nil {
-			return false, err
-		}
-
-		if !ok {
-			// Perform raw disk initialization
-			if err := mounter.IscsiDiskInit(serialnum); err != nil {
-				return false, err
-			}
-		}
-
-		return true, nil
-	}
-
-	err := wait.ExponentialBackoff(
-		wait.Backoff{
-			Duration: 200 * time.Millisecond,
-			Factor:   1.2,
-			Steps:    10,
-			Cap:      1 * time.Second,
-		}, f,
-	)
-
-	if err != nil {
-		return err
-	}
-
-	exists, err := mounter.IscsiVolumeExists(fslabel)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
-
-	// very longish operation
-	cmdLine := fmt.Sprintf(`Get-Disk -SerialNumber ${Env:disk_serial_number} | ` +
-		`New-Partition -UseMaximumSize | ` +
-		`Format-Volume -FileSystem ntfs -AllocationUnitSize 4096 -NewFileSystemLabel ${Env:fs_label}`)
-
-	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("disk_serial_number=%s", serialnum), fmt.Sprintf("fs_label=%s", fslabel))
-	if err != nil {
-		return fmt.Errorf("disk format fail, cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
-	}
-
-	exists, err = mounter.IscsiVolumeExists(fslabel)
-	if err != nil {
-		return err
-	}
-
-	if !exists {
-		return fmt.Errorf("disk format failure - unknown")
-	}
-
-	return nil
-}
-
-func (mounter *csiProxyMounter) IscsiVolumeReadOnly(fslabel string) (bool, error) {
-	exists, err := mounter.IscsiVolumeExists(fslabel)
-	if err != nil {
-		return false, err
-	}
-	if !exists {
-		return false, ErrNoSuchVolume
-	}
-
-	cmdLine := fmt.Sprintf(`(Get-Volume -FilesystemLabel ${Env:fs_label} | Get-Partition).IsReadOnly`)
-	out, stderr, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel))
-	if err != nil {
-		return false, fmt.Errorf("IscsiVolumeReadOnly fail, cmd:%s, output:%s, err: %w", cmdLine, string(stderr), err)
-	}
-
-	return strconv.ParseBool(string(out))
-}
-
-func (mounter *csiProxyMounter) IscsiVolumeSetReadOnly(fslabel string, readonly bool) error {
-	exists, err := mounter.IscsiVolumeExists(fslabel)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return ErrNoSuchVolume
-	}
-
-	cmdLine := fmt.Sprintf(`Get-Volume -FilesystemLabel ${Env:fs_label} | Get-Partition | Set-Partition -IsReadOnly ${Env:readonly}`)
-	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel), fmt.Sprintf("readonly=%t", readonly))
-	if err != nil {
-		return fmt.Errorf("IscsiVolumeSetReadOnly fail, cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
-	}
-
-	return err
-}
-
-func (mounter *csiProxyMounter) IscsiSetMutualChapSecret(req *iscsi.SetMutualChapSecretRequest) (*iscsi.SetMutualChapSecretResponse, error) {
-	klog.V(2).Infof("IscsiSetMutualChapSecret: chap secret %v", req.MutualChapSecret)
-	// return mounter.ISCSIClient.SetMutualChapSecret(context.Background(), req)
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (mounter *csiProxyMounter) IscsiVolumeMount(fslabel string, path string) error {
-	normalizedPath := normalizeWindowsPath(path, false)
-
-	// check if path already mounted.
-	if mounts, e := mounter.IscsiGetVolumeMounts(fslabel, false); e == nil {
-		for _, p := range mounts {
-			if strings.ToLower(p) == strings.ToLower(normalizedPath) {
-				return nil
-			}
-		}
-	}
-
-	// NOTE: path has to be exist as a directory
-	if err := os.MkdirAll(normalizedPath, 0755); err != nil && !os.IsExist(err) {
-		return err
-	}
-
-	// Runs: Get-Volume -FilesystemLabel 398649739277880943 |Get-Partition |Add-PartitionAccessPath -AccessPath c:\temp\test
-	cmdLine := fmt.Sprintf(`Get-Volume -FileSystemLabel ${Env:fs_label} | ` +
-		`Get-Partition | ` +
-		`Add-PartitionAccessPath -AccessPath ${Env:access_path}`)
-	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel), fmt.Sprintf("access_path=%s", normalizedPath))
-	if err != nil {
-		return fmt.Errorf("volume mount fail cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
-	}
-	return nil
-}
-
-func (mounter *csiProxyMounter) IscsiVolumeUnmount(fslabel string, path string) error {
-	normalizedPath := normalizeWindowsPath(path, false)
-
-	/// pre-check if volume exists
-	exists, err := mounter.IscsiVolumeExists(fslabel)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return nil
-	}
-
-	// Runs: Get-Volume -FilesystemLabel 398649739277880943 |Get-Partition |Remove-PartitionAccessPath -AccessPath c:\temp\test
-	cmdLine := fmt.Sprintf(`Get-Volume -FileSystemLabel ${Env:fs_label} -ErrorAction Stop | ` +
-		`Get-Partition | ` +
-		`Remove-PartitionAccessPath -AccessPath ${Env:access_path}`)
-	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel), fmt.Sprintf("access_path=%s", normalizedPath))
-	if err != nil {
-		// check if path already removed.
-		if mounts, e := mounter.IscsiGetVolumeMounts(fslabel, false); e == nil {
-			for _, p := range mounts {
-				if p == normalizedPath {
-					// hard failure - unmount really failed.
-					return fmt.Errorf("volume unmount fail cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
-				}
-			}
-			return nil
-		}
-
-		return fmt.Errorf("volume unmount fail cmd:%s, output:%s, err: %w", cmdLine, string(out), err)
-	}
-	return nil
-}
-
-func (mounter *csiProxyMounter) IscsiGetVolumeMounts(fslabel string, filter bool) ([]string, error) {
-	// Runs: ConvertTo-Json -InputObject @(Get-Volume -FilesystemLabel 398649739277880943 |Get-Partition | Select-Object AccessPaths)
-	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(Get-Volume -FileSystemLabel ${Env:fs_label} -ErrorAction Stop| ` +
-		`Get-Partition | Select-Object AccessPaths)`)
-	out, stderr, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel))
-	if err != nil {
-		return nil, fmt.Errorf("volume get mounts fail cmd:%s, output:%s, err: %w", cmdLine, string(stderr), err)
-	}
-
-	type Mounts struct {
-		AccessPaths []string
-	}
-	var mounts []Mounts
-
-	err = json.Unmarshal(out, &mounts)
-	if err != nil {
-		klog.V(2).Infof("unmarshal failed - output %v", string(out))
-		return nil, ErrNoSuchVolume
-	}
-
-	if len(mounts) == 0 {
-		return nil, nil
-	}
-
-	if len(mounts) != 1 {
-		klog.V(2).Infof("IscsiGetVolumeMounts found multiple volumes(%v) - unexpected", mounts)
-	}
-	mount := mounts[0]
-
-	// will hold default volume access path like:  "\\\\?\\Volume{8210f2d0-ed6d-47ca-8ba2-8040fa14af11}\\"
-	if filter {
-		var res []string
-		for _, p := range mount.AccessPaths {
-			if strings.HasPrefix(p, "\\\\?\\Volume{") {
-				continue
-			}
-			res = append(res, p)
-		}
-		return res, nil
-	}
-	return mount.AccessPaths, nil
-}
-
-func (mounter *csiProxyMounter) IscsiGetTargetNodeAddress(fslabel string) (string, error) {
-	// Runs: (Get-Volume -FilesystemLabel 398649739277880943 | Get-Partition | Get-Disk |Get-IscsiSession).TargetNodeAddress
-	cmdLine := fmt.Sprintf(`ConvertTo-Json -InputObject @(Get-Volume -FileSystemLabel ${Env:fs_label} | ` +
-		`Get-Partition | Get-Disk  | Get-IscsiSession | Select-Object -ExpandProperty TargetNodeAddress)`)
-	out, stderr, err := RunPowershellCmd(cmdLine, fmt.Sprintf("fs_label=%s", fslabel))
-	if err != nil {
-		return "", fmt.Errorf("volume get mounts fail cmd:%s, output:%s, err: %w", cmdLine, string(stderr), err)
-	}
-
-	var iqns []string
-	err = json.Unmarshal(out, &iqns)
-	if err != nil {
-		return "", err
-	}
-
-	if len(iqns) == 0 {
-		return "", ErrNoSuchVolume
-	}
-
-	if len(iqns) != 1 {
-		klog.Warningf("probed for volume %s and found many iqns %v", fslabel, iqns)
-	}
-	return iqns[0], nil
-}
-
-// Iscsi end
-
-// SMB + NFS start
-func (mounter *csiProxyMounter) SMBMount(source, target, fsType string, mountOptions, sensitiveMountOptions []string) error {
-	klog.V(2).Infof("SMBMount: remote path: %s local path: %s", source, target)
-
-	if len(mountOptions) == 0 || len(sensitiveMountOptions) == 0 {
-		return fmt.Errorf("empty mountOptions(len: %d) or sensitiveMountOptions(len: %d) is not allowed", len(mountOptions), len(sensitiveMountOptions))
-	}
-
-	parentDir := filepath.Dir(target)
-	parentExists, err := mounter.ExistsPath(parentDir)
-	if err != nil {
-		return fmt.Errorf("parent dir: %s exist check failed with err: %v", parentDir, err)
-	}
-
-	if !parentExists {
-		klog.V(2).Infof("Parent directory %s does not exists. Creating the directory", parentDir)
-		if err := mounter.MakeDir(parentDir); err != nil {
-			return fmt.Errorf("create of parent dir: %s dailed with error: %v", parentDir, err)
-		}
-	}
-
-	parts := strings.FieldsFunc(source, Split)
-	if len(parts) > 0 && strings.HasSuffix(parts[0], "svc.cluster.local") {
-		domainName := parts[0]
-		klog.V(2).Infof("begin to replace hostname(%s) with IP for source(%s)", domainName, source)
-		ip, err := net.ResolveIPAddr("ip4", domainName)
-		if err != nil {
-			klog.Warningf("could not resolve name to IPv4 address for host %s, failed with error: %v", domainName, err)
-		} else {
-			klog.V(2).Infof("resolve the name of host %s to IPv4 address: %s", domainName, ip.String())
-			source = strings.Replace(source, domainName, ip.String(), 1)
-		}
-	}
-
-	volid := mountOptions[1]
-	// TODO: Assert: volid is not empty
-	source = strings.Replace(source, "/", "\\", -1)
-	source = strings.TrimSuffix(source, "\\")
-	mappingPath, err := getRootMappingPath(source)
-	if mounter.RemoveSMBMappingDuringUnmount && err != nil {
-		return fmt.Errorf("getRootMappingPath(%s) failed with error: %v", source, err)
-	}
-	unlock := lock(mappingPath)
-	defer unlock()
-
-	normalizedTarget := normalizeWindowsPath(target, false)
-	smbMountRequest := &smb.NewSmbGlobalMappingRequest{
-		LocalPath:  normalizedTarget,
-		RemotePath: source,
-		Username:   mountOptions[0],
-		Password:   sensitiveMountOptions[0],
-	}
-	klog.V(2).Infof("begin to NewSmbGlobalMapping %s on %s", source, normalizedTarget)
-	if err := mounter.NewSmbGlobalMapping(smbMountRequest); err != nil {
-		return fmt.Errorf("NewSmbGlobalMapping(%s, %s) failed with error: %v", source, normalizedTarget, err)
-	}
-	klog.V(2).Infof("NewSmbGlobalMapping %s on %s successfully", source, normalizedTarget)
-
-	//Link: MountedShare => WorkPath
-	workPath := volumePath(volid)
-	cmdLine := fmt.Sprintf("mklink /D %s %s", workPath, source)
-	_, out, err := RunCmd(cmdLine)
-	if err != nil {
-		klog.V(2).Infof("SMBMount failed for volume id: %s err: %v", volid, err)
-		return fmt.Errorf("err SMBMount. cmd %s, output %s, err %v", cmdLine, string(out), err)
-	}
-
-	// Create workpath.smb mode file to indicate created by <protocol>.mount
-	tmpFile := fmt.Sprintf("%s%s", workPath, "smb")
-	klog.V(2).Infof("AddDrive Creating temporary file to store protocol %s", tmpFile)
-	if tmpFh, err2 := os.Create(tmpFile); err2 != nil {
-		klog.V(2).Infof("AddDrive Creating temporary file %s failed %v", tmpFile, err2)
-	} else {
-		tmpFh.Close()
-	}
-
-	// Link WorkPath =>Target.
-	klog.V(2).Infof("Linking %s on %s", normalizedTarget, workPath)
-	cmdLine = fmt.Sprintf("mklink /D %s %s", normalizedTarget, workPath)
-	_, out, err = RunCmd(cmdLine)
-	if err != nil {
-		klog.V(2).Infof("AddDrive MkVolume: volid %s, failed %v", volid, err)
-		return fmt.Errorf("error mkvolume. cmd %s, output %s, err %v", cmdLine, string(out), err)
-	}
-
-	if mounter.RemoveSMBMappingDuringUnmount {
-		if err := incementRemotePathReferencesCount(mappingPath, source); err != nil {
-			return fmt.Errorf("incementMappingPathCount(%s, %s) failed with error: %v", mappingPath, source, err)
-		}
-	}
-	return nil
-}
-
-// Mount the share using smb protocol
-func (mounter *csiProxyMounter) NewSmbGlobalMapping(req *smb.NewSmbGlobalMappingRequest) error {
-	// use PowerShell Environment Variables to store user input string to prevent command line injection
-	// https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_environment_variables?view=powershell-5.1
-	cmdLine := fmt.Sprintf(`$PWord = ConvertTo-SecureString -String $Env:smbpassword -AsPlainText -Force` +
-		`;$Credential = New-Object -TypeName System.Management.Automation.PSCredential -ArgumentList localhost\$Env:smbuser, $PWord` +
-		`;New-SmbGlobalMapping -RemotePath $Env:smbremotepath -Credential $Credential -Persistent 1`)
-
-	if _, output, err := RunPowershellCmd(cmdLine, fmt.Sprintf("smbuser=%s", req.Username),
-		fmt.Sprintf("smbpassword=%s", req.Password),
-		fmt.Sprintf("smbremotepath=%s", req.RemotePath)); err != nil {
-
-		errv := fmt.Errorf("NewSmbGlobalMapping failed. output: %q, err: %v, user=%s, pass=%s, remotepath=%s",
-			string(output), err, req.Username, req.Password, req.RemotePath)
-		klog.V(2).Infof("NewSmbGlobalMapping failed %v", errv)
-		return errv
-	}
-	return nil
-}
-
-func (mounter *csiProxyMounter) SMBUnmount(target string) error {
-	klog.V(4).Infof("SMBUnmount: local path: %s", target)
-
-	if remotePath, err := os.Readlink(target); err != nil {
-		klog.Warningf("SMBUnmount: can't get remote path: %v", err)
-	} else {
-		remotePath = strings.TrimSuffix(remotePath, "\\")
-		mappingPath, err := getRootMappingPath(remotePath)
-		if mounter.RemoveSMBMappingDuringUnmount && err != nil {
-			return fmt.Errorf("getRootMappingPath(%s) failed with error: %v", remotePath, err)
-		}
-		klog.V(4).Infof("SMBUnmount: remote path: %s, mapping path: %s", remotePath, mappingPath)
-
-		unlock := lock(mappingPath)
-		defer unlock()
-
-		if mounter.RemoveSMBMappingDuringUnmount {
-			if err := decrementRemotePathReferencesCount(mappingPath, remotePath); err != nil {
-				return fmt.Errorf("decrementMappingPathCount(%s, %s) failed with error: %v", mappingPath, remotePath, err)
-			}
-			count := getRemotePathReferencesCount(mappingPath)
-			if count == 0 {
-				klog.V(2).Infof("begin to RemoveSmbGlobalMapping %s on %s", remotePath, target)
-				if err := mounter.RemoveSmbGlobalMapping(remotePath); err != nil {
-					return fmt.Errorf("RemoveSmbGlobalMapping failed with error: %v", err)
-				}
-				klog.V(2).Infof("RemoveSmbGlobalMapping %s on %s successfully", remotePath, target)
-			} else {
-				klog.Infof("SMBUnmount: found %d links to %s", count, mappingPath)
-			}
-		}
-	}
-
-	return mounter.Rmdir(target)
-}
-
-func (mounter *csiProxyMounter) RemoveSmbGlobalMapping(remotePath string) error {
-	//cmd := `Remove-SmbMapping -RemotePath $Env:smbremotepath -Force`
-	cmd := `Remove-SmbGlobalMapping -RemotePath $Env:smbremotepath -Force`
-	if _, output, err := RunPowershellCmd(cmd, fmt.Sprintf("smbremotepath=%s", remotePath)); err != nil {
-		return fmt.Errorf("UnmountSmbShare failed. output: %q, err: %v", string(output), err)
-	}
-	return nil
-}
-
-func (mounter *csiProxyMounter) IsSmbMapped(remotePath string) (bool, error) {
-	cmdLine := `$(Get-SmbMapping -RemotePath $Env:smbremotepath -ErrorAction Stop).Status `
-	cmdEnv := fmt.Sprintf("smbremotepath=%s", remotePath)
-	_, out, err := RunPowershellCmd(cmdLine, cmdEnv)
-	if err != nil {
-		return false, fmt.Errorf("error checking smb mapping. cmd %s, output: %s, err: %v", remotePath, string(out), err)
-	}
-
-	if len(out) == 0 || !strings.EqualFold(strings.TrimSpace(string(out)), "OK") {
-		return false, nil
-	}
-	return true, nil
-}
-
-func (mounter *csiProxyMounter) NewSmbLink(remotePath, localPath string) error {
-
-	if !strings.HasSuffix(remotePath, "\\") {
-		// Golang has issues resolving paths mapped to file shares if they do not end in a trailing \
-		// so add one if needed.
-		remotePath = remotePath + "\\"
-	}
-
-	cmdLine := `New-Item -ItemType SymbolicLink $Env:smblocalPath -Target $Env:smbremotepath`
-	_, output, err := RunPowershellCmd(cmdLine, fmt.Sprintf("smbremotepath=%s", remotePath), fmt.Sprintf("smblocalpath=%s", localPath))
-	if err != nil {
-		return fmt.Errorf("error linking %s to %s. output: %s, err: %v", remotePath, localPath, string(output), err)
-	}
-
-	return nil
-}
-
-// Mount just creates a soft link at target pointing to source.
 func (mounter *csiProxyMounter) Mount(source string, target string, fstype string, options []string) error {
-	klog.V(4).Infof("Mount: old name: %s. new name: %s", source, target)
-	source = normalizeWindowsPath(source, false)
-	target = normalizeWindowsPath(target, false)
-	if err := mounter.Rmdir(target); err != nil {
-		// PHani: klog.V(4).Infof("Mount: rmdir failed to remove target dir %s, %v", target, err)
-		//return err
-		klog.V(4).Infof("Mount: Rmdir on target %s returned %v", target, err)
-	}
-	klog.V(4).Infof("Mount: Symlink from source[%s] target [%s]", source, target)
-	err := os.Symlink(source, target)
-	if err != nil {
-		klog.V(4).Infof("Mount: symlink failed for  [%s] to [%s]", source, target, err)
-		klog.V(4).Infof("Mount: Trying mklink")
-		cmd := exec.Command("cmd", "/c", "mklink", "/D", target, source)
-		_, err = cmd.CombinedOutput()
-		if err != nil {
-			klog.V(4).Infof("Mount: mlinked failed for  [%s] to [%s]", source, target, err)
-			return err
-		}
-	}
-	return err
+	return nil
+}
+
+// Unmount - Removes the directory - equivalent to unmount on Linux.
+func (mounter *csiProxyMounter) Unmount(target string) error {
+	klog.V(4).Infof("Unmount: %s", target)
+	return mounter.Rmdir(target)
 }
 
 func Split(r rune) bool {
@@ -800,12 +87,6 @@ func (mounter *csiProxyMounter) Rmdir(path string) error {
 		return err
 	}
 	return nil
-}
-
-// Unmount - Removes the directory - equivalent to unmount on Linux.
-func (mounter *csiProxyMounter) Unmount(target string) error {
-	klog.V(4).Infof("Unmount: %s", target)
-	return mounter.Rmdir(target)
 }
 
 func (mounter *csiProxyMounter) List() ([]mount.MountPoint, error) {
@@ -902,29 +183,43 @@ func (mounter *csiProxyMounter) MountSensitiveWithoutSystemdWithMountFlags(sourc
 }
 
 // NFS Extensions
+
+// TargetPath: <podID + volumeID>
+// SharePath: \\NFSServer\<exportPath>
+// Nfs mount with Name TargetPath SharePath.
+// SoftLink => C:\var\pwxvol\TargetPath SharePath.
+// SoftLink => PublishPath to C:\var\pwxvol\TargetPath
+
 func (mounter *csiProxyMounter) AddDrive(
 	volid string,
 	share_path string,
 	sensitiveMountOptions []string,
-	csimode string,
+	targetPath string,
 ) error {
 
-	klog.V(2).Infof("AddDrive: volid %s, target %s, sensitiveOpts %v",
-		volid, share_path, sensitiveMountOptions)
+	klog.V(2).Infof("AddDrive: volid %s, source %s, targetPath %s, sensitiveOpts %v",
+		volid, share_path, targetPath, sensitiveMountOptions)
 
-	volName := volid
 	cmdLine := fmt.Sprintf(`New-PSDrive -Name ${Env:volid} -PSProvider FileSystem ` +
 		`-Root ${Env:path} -Scope Global -Description ${Env:pwxtag}`)
 
-	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volid=%s", volName),
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volid=%s", targetPath),
 		fmt.Sprintf("path=%s", share_path),
 		fmt.Sprintf("pwxtag=%s", pwxtag))
+
 	if err != nil {
 		klog.V(2).Infof("AddDrive: volid %s, cmd %v, failed %v", volid, cmdLine, err)
 		return fmt.Errorf("error nfs mounting. cmd %s, output %s. err %v", cmdLine, string(out), err)
 	}
 
-	workPath := volumePath(volid)
+	klog.V(2).Infof("Successfully mounted Path from  %s, to ", share_path)
+	workPath := volumePath(targetPath)
+	_, err = os.Stat(workPath)
+	if err == nil {
+		os.Remove(workPath)
+	}
+
+	klog.V(2).Infof("AddDrive: Creating Path from  %s, to %s", workPath, share_path)
 	cmdLine = fmt.Sprintf("mklink /D %s %s", workPath, share_path)
 	_, out, err = RunCmd(cmdLine)
 	if err != nil {
@@ -936,17 +231,11 @@ func (mounter *csiProxyMounter) AddDrive(
 }
 
 func (mounter *csiProxyMounter) RmDrive(
-	volid string,
+	volid, targetPath string,
 ) error {
-	// cleanup can never fail, just log and continue
-	err := mounter.rmVolume(volid)
-	if err != nil {
-		klog.V(2).Infof("RmVolume(volid=%s) failed %v", volid, err)
-	}
-
-	klog.V(2).Infof("RmDrive: volid %s", volid)
+	klog.V(2).Infof("RmDrive: volid %s targetPath %s", volid, targetPath)
 	cmdLine := fmt.Sprintf(`Remove-PSDrive -Name ${Env:volid}`)
-	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volid=%s", volid))
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volid=%s", targetPath))
 	if err != nil {
 		klog.V(2).Infof("RmDrive: volid %s, cmd %v, failed %s/%v", volid, cmdLine, string(out), err)
 	}
@@ -1000,26 +289,6 @@ func (mounter *csiProxyMounter) DriveExists(
 	return ok, err
 }
 
-func (mounter *csiProxyMounter) mkVolume(volid string) error {
-	// runs:
-	// New-item -Path c:\myvol\vol1 -ItemType SymbolicLink -Value 615688357680565115: - This does not work
-	// use cli: cmd.exe /c "mklink /D c:\pwxvol\615688357680565485  \\10.13.197.205\var\lib\osd\pxns\615688357680565485"
-	klog.V(2).Infof("MkVolume: volid %s", volid)
-
-	workPath := volumePath(volid)
-	psdrive := volid + ":"
-
-	cmdLine := "New-Item -Path ${Env:workPath} -ItemType SymbolicLink -Value ${Env:psdrive}"
-	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("workPath=%s", workPath),
-		fmt.Sprintf("psdrive=%s", psdrive))
-	if err != nil {
-		klog.V(2).Infof("MkVolume: volid %s, failed %v", volid, err)
-		return fmt.Errorf("error mkvolume. cmd %s, output %s, err %v", cmdLine, string(out), err)
-	}
-
-	return nil
-}
-
 func (mounter *csiProxyMounter) MkLink(volid, target string) error {
 	// runs:
 	// New-item -Path c:\myvol\vol1 -ItemType SymbolicLink -Value c:\pwxvol\615688357680565115
@@ -1057,6 +326,25 @@ func (mounter *csiProxyMounter) rmVolume(volid string) error {
 
 	path := volumePath(volid)
 	return mounter.RmLink(volid, path)
+}
+
+func (mounter *csiProxyMounter) getMountTargetID(target, volid string) (string, error) {
+	targetParts := strings.FieldsFunc(target, Split)
+	klog.V(2).Infof("norm target %v, split %+v", target, targetParts)
+	var podID string
+	var i int
+	for i = 0; i < len(targetParts) - 1; i++ {
+		if targetParts[i] == "pods" {
+			break
+		}
+	}
+	//mount name: <podID+volid>
+	if i >= len(targetParts) - 1 {
+		return "", fmt.Errorf("Didn't find pod ID")
+	}
+	podID = targetParts[i+1]
+	mountName := fmt.Sprintf("%s-%s", podID, volid)
+	return mountName, nil
 }
 
 func (mounter *csiProxyMounter) NfsMount(
@@ -1110,111 +398,44 @@ func (mounter *csiProxyMounter) NfsMount(
 	klog.V(2).Infof("norm source %v, split %+v", source, parts)
 
 	// 'source' path has to be of form: //<ip>/var/lib/osd/mounts/<volid>
-	host := parts[0]
 	volid := parts[len(parts)-1]
-	// sharename := volid
-
-	unlock := lock(volid)
-	defer unlock()
-
 	normalizedTarget := normalizeWindowsPath(target, false)
+	mountName, err := mounter.getMountTargetID(normalizedTarget, volid)
+	if err != nil {
+		klog.V(2).Infof("begin to add drive vol %s, from %s on %s", volid, source, normalizedTarget)
+		return err
+	}
 
-	created := false
-	if ok, err := mounter.DriveExists(volid); err != nil {
+	if ok, err := mounter.DriveExists(mountName); err != nil {
 		return err
 	} else if !ok {
-		klog.V(2).Infof("begin to add drive vol %s, from %s on %s", volid, source, normalizedTarget)
-		err := mounter.AddDrive(volid, source, nil, "nfs")
+		klog.V(2).Infof("begin to add drive vol %s, from %s on %s", volid, source, mountName)
+		err := mounter.AddDrive(volid, source, nil, mountName)
 
 		if err != nil {
+			klog.V(2).Infof("Failed to addDrive %s, %s, %s, error(%v)", volid, source, normalizedTarget, err)
 			return err
 		}
-		created = true
 	}
-
-	if err := mounter.MkLink(volid, normalizedTarget); err != nil {
-		if created {
-			if err2 := mounter.RmDrive(volid); err2 != nil {
-				klog.V(2).Infof("cleanup drive vol %s failed %v", volid, err2)
-			}
-		}
+	mountNamePath := volumePath(mountName)
+	// symlink the mountName to the targetPath
+	klog.V(2).Infof("NfsMount: Creating Symlink from  %s, to %s", mountNamePath, normalizedTarget)
+	if err := mounter.MkLink(mountName, normalizedTarget); err != nil {
+		klog.V(2).Infof("Failed to addDrive %s, %s, %s, error(%v)", volid, source, normalizedTarget, err)
 		return err
 	}
 
-	tmpPath := fmt.Sprintf("%s%s", volumePath(volid), "nfs")
-	klog.V(2).Infof("AddDrive Creating file %s", tmpPath)
-	if emptyfile, err2 := os.Create(tmpPath); err2 != nil {
-		klog.V(4).Infof("Unable to create tmppath %s %v", volid, err2)
-	} else {
-		emptyfile.Close()
-	}
-
-	if err := incementRemotePathReferencesCount(volid, host); err != nil {
-		return fmt.Errorf("incementMappingPathCount(%s, %s) failed with error: %v", volid, host, err)
-	}
+	klog.V(2).Infof("NfsMount: Returning successfully")
 	return nil
 }
 
-func (mounter *csiProxyMounter) NfsUnmount(volumeId string, target string) error {
+func (mounter *csiProxyMounter) NfsUnmount(volumeID string, target string) error {
 	klog.V(4).Infof("Unmount: local path: %s", target)
-	workPath := volumePath(volumeId)
-	tmpPath := fmt.Sprintf("%s%s", workPath, "nfs")
-	_, err := os.Stat(tmpPath)
-	if os.IsNotExist(err) {
-		tmpPath = fmt.Sprintf("%s%s", workPath, "smb")
-		_, err := os.Stat(tmpPath)
-		if err == nil {
-			ret := mounter.SMBUnmount(target)
-			os.Remove(tmpPath)
-			return ret
-		}
-		tmpPath = fmt.Sprintf("%s%s", workPath, "nfs")
-	} else {
-		klog.V(4).Infof("Unmount: Successful stat of  tmpPath: %s", tmpPath)
-	}
+	normalizedTarget := normalizeWindowsPath(target, false)
+	mountName, _ := mounter.getMountTargetID(normalizedTarget, volumeID)
 
-	// Proceed with Nfs Unmount.
-	klog.V(4).Infof("NfsUnmount: local path: %s", target)
-
-	if remotePath, err := os.Readlink(target); err != nil {
-		klog.Warningf("NfsUnmount: can't get remote path: %v", err)
-	} else {
-		if tmpRemotePath, err := os.Readlink(remotePath); err != nil {
-			klog.Infof("NfsUnmount: Reading link for remotePath %s failed %v", remotePath, err)
-		} else {
-			klog.Warningf("NfsUnmount: tmp remote path: %v", tmpRemotePath)
-			tmpRemotePath = strings.TrimSuffix(tmpRemotePath, "\\")
-			parts := strings.FieldsFunc(tmpRemotePath, Split)
-			volid := parts[len(parts)-1]
-			host := parts[0]
-
-			klog.V(4).Infof("NfsUnmount: remote path: %s, mapping path: %s, host %s", tmpRemotePath, volid, host)
-
-			unlock := lock(volid)
-			defer unlock()
-
-			if err := decrementRemotePathReferencesCount(volid, host); err != nil {
-				klog.Warningf("NfsUnmount: decrementMappingPathCount(%s, %s) failed with error: %v", volid, host, err)
-			} else {
-				count := getRemotePathReferencesCount(volid)
-				if count == 0 {
-					klog.V(2).Infof("begin to Unmount volume %s on %s", remotePath, target)
-					mounter.RmLink(volid, target)
-					mounter.rmVolume(volid)
-					mounter.RmDrive(volid)
-					os.Remove(tmpPath)
-					return nil
-				} else {
-					klog.Infof("NfsUnmount: found %d links to %s", count, volid)
-				}
-			}
-		}
-	}
-
-	err = mounter.Rmdir(target)
-	if err != nil {
-		klog.Warningf("NfsUnmount: rmdir %s, failed %s", target, err)
-	}
+	klog.V(2).Infof("begin to Unmount volume %s on %s", volumeID, target)
+	mounter.RmDrive(volumeID, mountName)
 	return nil
 }
 
@@ -1227,12 +448,6 @@ func NewSmbCSIProxyMounter(removeSMBMappingDuringUnmount bool) (*csiProxyMounter
 	}, nil
 }
 
-// NewIscsiCSIProxyMounter - creates a new CSI Proxy mounter struct which provides the wrapper over
-// needed iscsi operations.
-func NewIscsiCSIProxyMounter() (*csiProxyMounter, error) {
-	return &csiProxyMounter{Mode: common.DriverModeFlagIscsi}, nil
-}
-
 func NewNfsCSIProxyMounter() (*csiProxyMounter, error) {
 	return &csiProxyMounter{Mode: common.DriverModeFlagNfs, RemoveSMBMappingDuringUnmount: true}, nil
 }
@@ -1241,21 +456,7 @@ func NewSafeMounter(mode string, removeSMBMappingDuringUnmount bool) (*mount.Saf
 	var csiProxyMounter *csiProxyMounter
 	var err error
 
-	if mode == common.DriverModeSmb {
-		csiProxyMounter, err = NewSmbCSIProxyMounter(removeSMBMappingDuringUnmount)
-		if err != nil {
-			klog.V(2).Infof("failed to connect to csi-proxy with error: %v", err)
-			return nil, err
-		}
-		klog.V(2).Infof("using SMB CSIProxyMounterV1")
-	} else if mode == common.DriverModeIscsi {
-		csiProxyMounter, err = NewIscsiCSIProxyMounter()
-		if err != nil {
-			klog.V(2).Infof("failed to initialize iscsi mounter: %v", err)
-			return nil, err
-		}
-		klog.V(2).Infof("using ISCSI CSIProxyMounterV1")
-	} else if mode == common.DriverModeNfs {
+	if mode == common.DriverModeNfs {
 		csiProxyMounter, err = NewNfsCSIProxyMounter()
 		if err != nil {
 			klog.V(2).Infof("failed to initialize nfs mounter: %v", err)

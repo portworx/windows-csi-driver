@@ -27,7 +27,6 @@ import (
 	_ "path/filepath"
 	_ "runtime"
 	"strings"
-	"time"
 	"math/rand"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -35,7 +34,6 @@ import (
 	"github.com/portworx/windows-csi-driver/pkg/utils"
 
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
 	_ "k8s.io/kubernetes/pkg/volume"
 
@@ -76,7 +74,8 @@ func csiMounter(m mount.Interface) mounter.CSIProxyMounter {
 	return p1
 }
 
-// NodePublishVolume mount the volume from staging to target path
+// NodePublishVolume: Mount the volume to the target location.
+
 func (d *nfsDriver) nfsNodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
 	if req.GetVolumeCapability() == nil {
 		return nil, status.Error(codes.InvalidArgument, "Volume capability missing in request")
@@ -95,12 +94,6 @@ func (d *nfsDriver) nfsNodePublishVolume(ctx context.Context, req *csi.NodePubli
 		return nil, status.Errorf(codes.Aborted, utils.VolumeOperationAlreadyExistsFmt, volumeID)
 	}
 	defer d.volumeLocks.Release(volumeID)
-	/*
-	source := req.GetStagingTargetPath()
-	if len(source) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "Staging target not provided")
-	}
-	*/
 
 	mountOptions := []string{"bind"}
 	if req.GetReadonly() {
@@ -126,17 +119,13 @@ func (d *nfsDriver) nfsNodePublishVolume(ctx context.Context, req *csi.NodePubli
 	}
 	endpoint, err := d.getEndpoint(ctx, volumeID, ipAddr, target)
 	if err != nil {
-		klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ipAddr, volumeID, err)
+		klog.V(2).Infof("NodePublishVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ipAddr, volumeID, err)
 		return nil, err
 	}
-	//klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Inspect returned [%v] volInfo[%v]", ipAddr, volumeID, err, volInfo)
 	exportpath := fmt.Sprintf("/var/lib/osd/pxns/%s", volumeID)
-	//csimode := "nfs"
 	source := fmt.Sprintf("\\\\%s\\%s", endpoint, exportpath)
 
-
 	klog.V(2).Infof("NodePublishVolume: mounting %s at %s with mountOptions: %v volumeID(%s)", source, target, mountOptions, volumeID)
-	//if err := d.mounter.Mount(source, target, "", mountOptions); err != nil {
 	m := csiMounter(d.mounter)
 	if err := m.NfsMount(source, target, "nfs", mountOptions, nil); err != nil {
 		klog.V(2).Infof("NodePublishVolume: mounting %s at %s with mountOptions: %v volumeID(%s) Failed with error [%v]", source, target, mountOptions, volumeID, err)
@@ -160,12 +149,57 @@ func (d *nfsDriver) nfsNodeUnpublishVolume(ctx context.Context, req *csi.NodeUnp
 		return nil, status.Error(codes.InvalidArgument, "Target path missing in request")
 	}
 
+	if acquired := d.volumeLocks.TryAcquire(volumeID); !acquired {
+		return nil, status.Errorf(codes.Aborted, utils.VolumeOperationAlreadyExistsFmt, volumeID)
+	}
+	defer d.volumeLocks.Release(volumeID)
+
 	klog.V(2).Infof("NodeUnpublishVolume: unmounting volume %s on %s", volumeID, targetPath)
 	err := CleanupMountPoint(safeMounter(d.mounter), targetPath, true /*extensiveMountPointCheck*/)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to unmount target %q: %v", targetPath, err)
 	}
 	klog.V(2).Infof("NodeUnpublishVolume: unmount volume %s on %s successfully", volumeID, targetPath)
+
+	m := csiMounter(d.mounter)
+	if err := m.NfsUnmount(volumeID, targetPath); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to unmount targetPath %q: %v", targetPath, err)
+	}
+
+	// Inform Linux Px nodes.
+	ipAddr, err := d.getRpcAddr()
+	if err != nil {
+		return nil, err
+	}
+	myip, err := getLocalIPList()
+	driverOpts := make(map[string]string)
+	driverOpts["WindowsClient"] = "true"
+	if myip != "" {
+		driverOpts[api.OptProxyCaller] = myip
+		driverOpts[api.OptProxyCallerIP] = myip
+		driverOpts[api.OptMountID] = base64.StdEncoding.EncodeToString(
+                        []byte(strings.TrimSuffix(targetPath, "/")),
+			)
+	}
+	conn, err := grpc.Dial(ipAddr, grpc.WithInsecure())
+	if err != nil {
+		klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ipAddr, volumeID, err)
+		return nil, err
+	}
+	mountPath := path.Join(api.SharedVolExportPrefix, volumeID)
+	mountUnmountClient := api.NewOpenStorageMountAttachClient(conn)
+	klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v]: Issuing Unmount path[%s]", ipAddr, volumeID, err, mountPath)
+	_, err = mountUnmountClient.Unmount(ctx, &api.SdkVolumeUnmountRequest{MountPath: mountPath, VolumeId: volumeID,  DriverOptions: driverOpts})
+	if  err != nil {
+		klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v] Unable to Unmount volume. Error[%v]", ipAddr, volumeID, err)
+		return nil, err
+	}
+	_, err = mountUnmountClient.Detach(ctx, &api.SdkVolumeDetachRequest{VolumeId: volumeID,  DriverOptions: driverOpts})
+	if  err != nil {
+		klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v] Unable to Detach volume. Error[%v]", ipAddr, volumeID, err)
+		return nil, err
+	}
+
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
@@ -243,7 +277,6 @@ func (d *nfsDriver)getRpcAddr() (string, error) {
 		for k, v := range n.GetAnnotations() {
 			nodeLabels[k] = v
 		}
-		klog.V(2).Infof("NodePublishVolume: Kubernetes Node [%v]", n.GetName())
 		v, ok := nodeLabels["beta.kubernetes.io/os"]
 		if ok && v == "linux" {
 			csi, ok := nodeLabels["csi.volume.kubernetes.io/nodeid"]
@@ -308,159 +341,6 @@ func (d *nfsDriver) getEndpoint(ctx context.Context, volumeID string, ipAddr, ta
 	return volInfo.GetVolume().GetAttachedOn(), nil
 }
 
-
-// NodeStageVolume mount the volume to a staging path
-func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
-	volumeID := req.GetVolumeId()
-	if len(volumeID) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
-	}
-
-	volumeCapability := req.GetVolumeCapability()
-	if volumeCapability == nil {
-		return nil, status.Error(codes.InvalidArgument, "Volume capability not provided")
-	}
-
-	targetPath := req.GetStagingTargetPath()
-	if len(targetPath) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "Staging target not provided")
-	}
-	var (
-		exportpath            string
-		source                string
-		ip                    string
-		mountOptions          []string
-		sensitiveMountOptions []string
-		endpoint              string
-		csimode               string
-	)
-
-
-	// For Windows share volume:
-	// On the linux node : Attach + Mount.
-	// Inspect the volume.
-	// handcraft export path /var/lib/osd/pxns/<volumeID>
-	// mount \\<attachedon>\exportpath.
-
-	ipAddr, err := d.getRpcAddr()
-	if err != nil {
-		return nil, err
-	}
-	endpoint, err = d.getEndpoint(ctx, volumeID, ipAddr, targetPath)
-	if err != nil {
-		klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ip, volumeID, err)
-		return nil, err
-	}
-	//klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Inspect returned [%v] volInfo[%v]", ipAddr, volumeID, err, volInfo)
-	exportpath = fmt.Sprintf("/var/lib/osd/pxns/%s", volumeID)
-
-	csimode = "nfs"
-
-	source = fmt.Sprintf("\\\\%s\\%s", endpoint, exportpath)
-
-	// THis path needs to be normalized, that happens within mounter package
-
-	klog.V(2).Infof("NodeStageVolume: volume %s, endpoint(%v), share(%v) - full source %s",
-		volumeID, endpoint, exportpath, source)
-
-	if acquired := d.volumeLocks.TryAcquire(volumeID); !acquired {
-		return nil, status.Errorf(codes.Aborted, utils.VolumeOperationAlreadyExistsFmt, volumeID)
-	}
-	defer d.volumeLocks.Release(volumeID)
-
-	isDirMounted, err := d.ensureMountPoint(targetPath)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Could not mount target %s: %v", targetPath, err)
-	}
-	if isDirMounted {
-		klog.V(2).Infof("NodeStageVolume: already mounted volume %s on target %s", volumeID, targetPath)
-	} else {
-		if err = prepareStagePath(targetPath, safeMounter(d.mounter)); err != nil {
-			return nil, fmt.Errorf("prepare stage path failed for %s with error: %v", targetPath, err)
-		}
-		mountComplete := false
-		err = wait.PollImmediate(1*time.Second, 2*time.Minute, func() (bool, error) {
-			m := csiMounter(d.mounter)
-			if csimode == "nfs" {
-				err = m.NfsMount(source, targetPath, "nfs", mountOptions, sensitiveMountOptions)
-			} else {
-				err = m.SMBMount(source, targetPath, "cifs", mountOptions, sensitiveMountOptions)
-			}
-			//err := Mount(safeMounter(d.mounter), source, targetPath, "nfs", mountOptions, sensitiveMountOptions)
-			mountComplete = true
-			return true, err
-		})
-		if !mountComplete {
-			return nil, status.Error(codes.Internal, fmt.Sprintf("volume(%s) mount %q on %q failed with timeout(10m)", volumeID, source, targetPath))
-		}
-		if err != nil {
-			return nil, status.Error(codes.Internal, fmt.Sprintf("volume(%s) mount %q on %q failed with %v", volumeID, source, targetPath, err))
-		}
-		klog.V(2).Infof("volume(%s) mount %q on %q succeeded", volumeID, source, targetPath)
-	}
-
-	return &csi.NodeStageVolumeResponse{}, nil
-}
-
-// NodeUnstageVolume unmount the volume from the staging path
-func (d *nfsDriver) nfsNodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
-	volumeID := req.GetVolumeId()
-	if len(volumeID) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
-	}
-	stagingTargetPath := req.GetStagingTargetPath()
-	if len(stagingTargetPath) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "Staging target not provided")
-	}
-
-	if acquired := d.volumeLocks.TryAcquire(volumeID); !acquired {
-		return nil, status.Errorf(codes.Aborted, utils.VolumeOperationAlreadyExistsFmt, volumeID)
-	}
-	defer d.volumeLocks.Release(volumeID)
-
-	klog.V(2).Infof("NodeUnstageVolume: CleanupMountPoint on %s with volume %s", stagingTargetPath, volumeID)
-	m := csiMounter(d.mounter)
-	if err := m.NfsUnmount(volumeID, stagingTargetPath); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to unmount staging target %q: %v", stagingTargetPath, err)
-	}
-	// Inform Linux Px nodes.
-	ipAddr, err := d.getRpcAddr()
-	if err != nil {
-		return nil, err
-	}
-	myip, err := getLocalIPList()
-	driverOpts := make(map[string]string)
-	driverOpts["WindowsClient"] = "true"
-	if myip != "" {
-		driverOpts[api.OptProxyCaller] = myip
-		driverOpts[api.OptProxyCallerIP] = myip
-		driverOpts[api.OptMountID] = base64.StdEncoding.EncodeToString(
-                        []byte(strings.TrimSuffix(stagingTargetPath, "/")),
-			)
-	}
-	conn, err := grpc.Dial(ipAddr, grpc.WithInsecure())
-	if err != nil {
-		klog.V(2).Infof("NodeUnstageVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ipAddr, volumeID, err)
-		return nil, err
-	}
-	mountPath := path.Join(api.SharedVolExportPrefix, volumeID)
-	mountUnmountClient := api.NewOpenStorageMountAttachClient(conn)
-	klog.V(2).Infof("NodeUnstageVolume: IpAddress [%v] volumeID[%v]: Issuing Unmount path[%s]", ipAddr, volumeID, err, mountPath)
-	_, err = mountUnmountClient.Unmount(ctx, &api.SdkVolumeUnmountRequest{MountPath: mountPath, VolumeId: volumeID,  DriverOptions: driverOpts})
-	if  err != nil {
-		klog.V(2).Infof("NodeUnstageVolume: IpAddress [%v] volumeID[%v] Unable to Unmount volume. Error[%v]", ipAddr, volumeID, err)
-		return nil, err
-	}
-	_, err = mountUnmountClient.Detach(ctx, &api.SdkVolumeDetachRequest{VolumeId: volumeID,  DriverOptions: driverOpts})
-	if  err != nil {
-		klog.V(2).Infof("NodeUnstageVolume: IpAddress [%v] volumeID[%v] Unable to Detach volume. Error[%v]", ipAddr, volumeID, err)
-		return nil, err
-	}
-
-	klog.V(2).Infof("NodeUnstageVolume: unmount volume %s on %s successfully", volumeID, stagingTargetPath)
-	return &csi.NodeUnstageVolumeResponse{}, nil
-}
-
 // ensureMountPoint: create mount point if not exists
 // return <true, nil> if it's already a mounted point otherwise return <false, nil>
 func (d *nfsDriver) ensureMountPoint(target string) (bool, error) {
@@ -509,25 +389,9 @@ func makeDir(pathname string) error {
 	return nil
 }
 
-func checkGidPresentInMountFlags(mountFlags []string) bool {
-	for _, mountFlag := range mountFlags {
-		if strings.HasPrefix(mountFlag, "gid") {
-			return true
-		}
-	}
-	return false
-}
-
 func Mount(m *mount.SafeFormatAndMount, source, target, fsType string, mountOptions, sensitiveMountOptions []string) error {
 	proxy := csiMounter(m.Interface)
 	return proxy.NfsMount(source, target, fsType, mountOptions, sensitiveMountOptions)
-}
-
-func RemoveStageTarget(m *mount.SafeFormatAndMount, target string) error {
-	if err := os.Remove(target); err != nil {
-		klog.V(2).Infof("Removing path: %s, failed %v", target, err)
-	}
-	return nil
 }
 
 func CleanupMountPoint(m *mount.SafeFormatAndMount, target string, extensiveMountCheck bool) error {
@@ -552,10 +416,6 @@ func removeDir(path string, m *mount.SafeFormatAndMount) error {
 // from global stage path to the publish path. But kubelet creates the directory in advance.
 // We work around this issue by deleting the publish path then recreating the link.
 func preparePublishPath(path string, m *mount.SafeFormatAndMount) error {
-	return removeDir(path, m)
-}
-
-func prepareStagePath(path string, m *mount.SafeFormatAndMount) error {
 	return removeDir(path, m)
 }
 

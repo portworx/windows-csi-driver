@@ -29,11 +29,11 @@ func (ns *nfsDriver) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpub
 }
 
 func (ns *nfsDriver) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstageVolumeRequest) (*csi.NodeUnstageVolumeResponse, error) {
-	return ns.nfsNodeUnstageVolume(ctx, req)
+	return nil, status.Error(codes.Unimplemented, "")
 }
 
 func (ns *nfsDriver) NodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
-	return ns.nfsNodeStageVolume(ctx, req)
+	return nil, status.Error(codes.Unimplemented, "")
 }
 
 func (ns *nfsDriver) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
@@ -50,7 +50,7 @@ func (ns *nfsDriver) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCa
 				Type: &csi.NodeServiceCapability_Rpc{
 					Rpc: &csi.NodeServiceCapability_RPC{
 						//Type: csi.NodeServiceCapability_RPC_UNKNOWN,
-						Type: csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
+						//:Type: csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME,
 					},
 				},
 			},
