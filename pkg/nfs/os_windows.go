@@ -91,10 +91,16 @@ func (d *nfsDriver) nfsNodePublishVolume(ctx context.Context, req *csi.NodePubli
 		return nil, status.Error(codes.InvalidArgument, "Target path not provided")
 	}
 
+	if acquired := d.volumeLocks.TryAcquire(volumeID); !acquired {
+		return nil, status.Errorf(codes.Aborted, utils.VolumeOperationAlreadyExistsFmt, volumeID)
+	}
+	defer d.volumeLocks.Release(volumeID)
+	/*
 	source := req.GetStagingTargetPath()
 	if len(source) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "Staging target not provided")
 	}
+	*/
 
 	mountOptions := []string{"bind"}
 	if req.GetReadonly() {
@@ -114,8 +120,25 @@ func (d *nfsDriver) nfsNodePublishVolume(ctx context.Context, req *csi.NodePubli
 		return nil, fmt.Errorf("prepare publish failed for %s with error: %v", target, err)
 	}
 
+	ipAddr, err := d.getRpcAddr()
+	if err != nil {
+		return nil, err
+	}
+	endpoint, err := d.getEndpoint(ctx, volumeID, ipAddr, target)
+	if err != nil {
+		klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ipAddr, volumeID, err)
+		return nil, err
+	}
+	//klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Inspect returned [%v] volInfo[%v]", ipAddr, volumeID, err, volInfo)
+	exportpath := fmt.Sprintf("/var/lib/osd/pxns/%s", volumeID)
+	//csimode := "nfs"
+	source := fmt.Sprintf("\\\\%s\\%s", endpoint, exportpath)
+
+
 	klog.V(2).Infof("NodePublishVolume: mounting %s at %s with mountOptions: %v volumeID(%s)", source, target, mountOptions, volumeID)
-	if err := d.mounter.Mount(source, target, "", mountOptions); err != nil {
+	//if err := d.mounter.Mount(source, target, "", mountOptions); err != nil {
+	m := csiMounter(d.mounter)
+	if err := m.NfsMount(source, target, "nfs", mountOptions, nil); err != nil {
 		klog.V(2).Infof("NodePublishVolume: mounting %s at %s with mountOptions: %v volumeID(%s) Failed with error [%v]", source, target, mountOptions, volumeID, err)
 		if removeErr := os.Remove(target); removeErr != nil {
 			return nil, status.Errorf(codes.Internal, "Could not remove mount target %q: %v", target, removeErr)
@@ -247,6 +270,45 @@ func (d *nfsDriver)getRpcAddr() (string, error) {
 	return str, nil
 }
 
+func (d *nfsDriver) getEndpoint(ctx context.Context, volumeID string, ipAddr, targetPath string) (string, error) {
+	myip, err := getLocalIPList()
+	driverOpts := make(map[string]string)
+	driverOpts["WindowsClient"] = "true"
+	if myip != "" {
+		driverOpts[api.OptProxyCaller] = myip
+		driverOpts[api.OptProxyCallerIP] = myip
+		driverOpts[api.OptMountID] = base64.StdEncoding.EncodeToString(
+                        []byte(strings.TrimSuffix(targetPath, "/")),
+			)
+	}
+	conn, err := grpc.Dial(ipAddr, grpc.WithInsecure())
+	if err != nil {
+		klog.V(2).Infof("getEndpoint: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ipAddr, volumeID, err)
+		return "", err
+	}
+
+	mountUnmountClient := api.NewOpenStorageMountAttachClient(conn)
+	_, err = mountUnmountClient.Attach(ctx, &api.SdkVolumeAttachRequest{VolumeId: volumeID})
+	if err != nil {
+		klog.V(2).Infof("getEndpoint: IpAddress [%v] volumeID[%v] Attach failed. Error[%v]", ipAddr, volumeID, err)
+		return "", err
+	}
+	mountPath := path.Join(api.SharedVolExportPrefix, volumeID)
+	_, err = mountUnmountClient.Mount(ctx, &api.SdkVolumeMountRequest{MountPath: mountPath, VolumeId: volumeID, DriverOptions: driverOpts})
+	if err != nil {
+		klog.V(2).Infof("getEndpoint: IpAddress [%v] volumeID[%v] Mount failed. Error[%v]", ipAddr, volumeID, err)
+		return "", err
+	}
+	volumeClient := api.NewOpenStorageVolumeClient(conn)
+	volInfo, err := volumeClient.Inspect(ctx, &api.SdkVolumeInspectRequest{VolumeId: volumeID})
+	if err != nil {
+		klog.V(2).Infof("getEndpoint: IpAddress [%v] volumeID[%v] Inspect failed. Error[%v]", ipAddr, volumeID, err)
+		return "", err
+	}
+	return volInfo.GetVolume().GetAttachedOn(), nil
+}
+
+
 // NodeStageVolume mount the volume to a staging path
 func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVolumeRequest) (*csi.NodeStageVolumeResponse, error) {
 	volumeID := req.GetVolumeId()
@@ -262,16 +324,6 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	targetPath := req.GetStagingTargetPath()
 	if len(targetPath) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "Staging target not provided")
-	}
-	myip, err := getLocalIPList()
-	driverOpts := make(map[string]string)
-	driverOpts["WindowsClient"] = "true"
-	if myip != "" {
-		driverOpts[api.OptProxyCaller] = myip
-		driverOpts[api.OptProxyCallerIP] = myip
-		driverOpts[api.OptMountID] = base64.StdEncoding.EncodeToString(
-                        []byte(strings.TrimSuffix(targetPath, "/")),
-			)
 	}
 	var (
 		exportpath            string
@@ -294,30 +346,12 @@ func (d *nfsDriver) nfsNodeStageVolume(ctx context.Context, req *csi.NodeStageVo
 	if err != nil {
 		return nil, err
 	}
-	conn, err := grpc.Dial(ipAddr, grpc.WithInsecure())
+	endpoint, err = d.getEndpoint(ctx, volumeID, ipAddr, targetPath)
 	if err != nil {
 		klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ip, volumeID, err)
 		return nil, err
 	}
-
-	mountUnmountClient := api.NewOpenStorageMountAttachClient(conn)
-	_, err = mountUnmountClient.Attach(ctx, &api.SdkVolumeAttachRequest{VolumeId: volumeID})
-	if err != nil {
-		return nil, err
-	}
-	klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Issuing Mount Grpc", ipAddr, volumeID)
-	mountPath := path.Join(api.SharedVolExportPrefix, volumeID)
-	_, err = mountUnmountClient.Mount(ctx, &api.SdkVolumeMountRequest{MountPath: mountPath, VolumeId: volumeID, DriverOptions: driverOpts})
-	if err != nil {
-		return nil, err
-	}
-	volumeClient := api.NewOpenStorageVolumeClient(conn)
-	volInfo, err := volumeClient.Inspect(ctx, &api.SdkVolumeInspectRequest{VolumeId: volumeID})
-	if err != nil {
-		return nil, err
-	}
 	//klog.V(2).Infof("NodeStageVolume: IpAddress [%v] volumeID[%v]: Inspect returned [%v] volInfo[%v]", ipAddr, volumeID, err, volInfo)
-	endpoint = volInfo.GetVolume().GetAttachedOn()
 	exportpath = fmt.Sprintf("/var/lib/osd/pxns/%s", volumeID)
 
 	csimode = "nfs"
