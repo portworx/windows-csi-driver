@@ -23,7 +23,7 @@ import (
 	//orgcontext "context"
 	"io/ioutil"
 	"os"
-	"path"
+	//"path"
 	_ "path/filepath"
 	_ "runtime"
 	"strings"
@@ -186,7 +186,8 @@ func (d *nfsDriver) nfsNodeUnpublishVolume(ctx context.Context, req *csi.NodeUnp
 		klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ipAddr, volumeID, err)
 		return nil, err
 	}
-	mountPath := path.Join(api.SharedVolExportPrefix, volumeID)
+	//mountPath := path.Join(api.SharedVolExportPrefix, volumeID)
+	mountPath := fmt.Sprintf("/var/lib/osd/pxns/%s", volumeID)
 	mountUnmountClient := api.NewOpenStorageMountAttachClient(conn)
 	klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v]: Issuing Unmount path[%s]", ipAddr, volumeID, err, mountPath)
 	_, err = mountUnmountClient.Unmount(ctx, &api.SdkVolumeUnmountRequest{MountPath: mountPath, VolumeId: volumeID,  DriverOptions: driverOpts})
@@ -194,11 +195,13 @@ func (d *nfsDriver) nfsNodeUnpublishVolume(ctx context.Context, req *csi.NodeUnp
 		klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v] Unable to Unmount volume. Error[%v]", ipAddr, volumeID, err)
 		return nil, err
 	}
+	klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v]: Issuing Detach path[%s]", ipAddr, volumeID, err, mountPath)
 	_, err = mountUnmountClient.Detach(ctx, &api.SdkVolumeDetachRequest{VolumeId: volumeID,  DriverOptions: driverOpts})
 	if  err != nil {
 		klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v] Unable to Detach volume. Error[%v]", ipAddr, volumeID, err)
 		return nil, err
 	}
+	klog.V(2).Infof("NodeUnpublishVolume: Returning success{}")
 
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
@@ -281,14 +284,25 @@ func (d *nfsDriver)getRpcAddr() (string, error) {
 		if ok && v == "linux" {
 			csi, ok := nodeLabels["csi.volume.kubernetes.io/nodeid"]
 			if ok && strings.Contains(csi, "pxd.portworx.com") {
-				for _, addr := range n.Status.Addresses {
-					switch addr.Type {
-					case corev1.NodeInternalIP:
-						ip = addr.Address
-						ipfound = true
-						ips[i] = ip
-						i = i+1
-						break;
+				skipNode := false
+				for _, condition := range n.Status.Conditions {
+					if condition.Type == "Ready" {
+						if condition.Status != "True" {
+							skipNode  = true
+						}
+					}
+				}
+
+				if !skipNode {
+					for _, addr := range n.Status.Addresses {
+						switch addr.Type {
+						case corev1.NodeInternalIP:
+							ip = addr.Address
+							ipfound = true
+							ips[i] = ip
+							i = i+1
+							break
+						}
 					}
 				}
 			}
@@ -326,7 +340,8 @@ func (d *nfsDriver) getEndpoint(ctx context.Context, volumeID string, ipAddr, ta
 		klog.V(2).Infof("getEndpoint: IpAddress [%v] volumeID[%v] Attach failed. Error[%v]", ipAddr, volumeID, err)
 		return "", err
 	}
-	mountPath := path.Join(api.SharedVolExportPrefix, volumeID)
+	//mountPath := path.Join(api.SharedVolExportPrefix, volumeID)
+	mountPath := fmt.Sprintf("/var/lib/osd/pxns/%s", volumeID)
 	_, err = mountUnmountClient.Mount(ctx, &api.SdkVolumeMountRequest{MountPath: mountPath, VolumeId: volumeID, DriverOptions: driverOpts})
 	if err != nil {
 		klog.V(2).Infof("getEndpoint: IpAddress [%v] volumeID[%v] Mount failed. Error[%v]", ipAddr, volumeID, err)

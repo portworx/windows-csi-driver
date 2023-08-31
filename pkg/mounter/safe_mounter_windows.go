@@ -110,6 +110,7 @@ func (mounter *csiProxyMounter) IsLikelyNotMountPoint(path string) (bool, error)
 	if os.IsNotExist(err) {
 		return true, os.ErrNotExist
 	}
+	klog.V(4).Infof("IsLikelyNotMountPoint: Stat on path %s returned %v", path, err)
 	return false, err
 }
 
@@ -434,7 +435,7 @@ func (mounter *csiProxyMounter) NfsUnmount(volumeID string, target string) error
 	normalizedTarget := normalizeWindowsPath(target, false)
 	mountName, _ := mounter.getMountTargetID(normalizedTarget, volumeID)
 
-	klog.V(2).Infof("begin to Unmount volume %s on %s", volumeID, target)
+	klog.V(2).Infof("begin to Unmount volume %s on %s", volumeID, mountName)
 	mounter.RmDrive(volumeID, mountName)
 	return nil
 }
