@@ -109,10 +109,6 @@ func (d *nfsDriver) nfsNodePublishVolume(ctx context.Context, req *csi.NodePubli
 		return &csi.NodePublishVolumeResponse{}, nil
 	}
 
-	if err = preparePublishPath(target, safeMounter(d.mounter)); err != nil {
-		return nil, fmt.Errorf("prepare publish failed for %s with error: %v", target, err)
-	}
-
 	ipAddr, err := d.getRpcAddr()
 	if err != nil {
 		return nil, err
@@ -124,6 +120,10 @@ func (d *nfsDriver) nfsNodePublishVolume(ctx context.Context, req *csi.NodePubli
 	}
 	exportpath := fmt.Sprintf("/var/lib/osd/pxns/%s", volumeID)
 	source := fmt.Sprintf("\\\\%s\\%s", endpoint, exportpath)
+
+	if err = preparePublishPath(target, safeMounter(d.mounter)); err != nil {
+		return nil, fmt.Errorf("prepare publish failed for %s with error: %v", target, err)
+	}
 
 	klog.V(2).Infof("NodePublishVolume: mounting %s at %s with mountOptions: %v volumeID(%s)", source, target, mountOptions, volumeID)
 	m := csiMounter(d.mounter)

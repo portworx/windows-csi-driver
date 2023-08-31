@@ -62,12 +62,13 @@ func normalizeWindowsPath(path string, networkpath bool) string {
 }
 
 func (mounter *csiProxyMounter) Mount(source string, target string, fstype string, options []string) error {
+	klog.V(2).Infof("Mount Called for Source[%s] Target[%s] FsType[%s]", source, target, fstype)
 	return nil
 }
 
 // Unmount - Removes the directory - equivalent to unmount on Linux.
 func (mounter *csiProxyMounter) Unmount(target string) error {
-	klog.V(4).Infof("Unmount: %s", target)
+	klog.V(2).Infof("Unmount called for Target [%s]", target)
 	return mounter.Rmdir(target)
 }
 
