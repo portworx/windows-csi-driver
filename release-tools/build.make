@@ -27,7 +27,7 @@ CMDS_DIR ?= cmd
 
 # This is the default. It can be overridden in the main Makefile after
 # including build.make.
-REGISTRY_NAME?=docker.io/sulakshm
+REGISTRY_NAME?=docker.io/portworx/windows-csi-driver
 
 # Can be set to -mod=vendor to ensure that the "vendor" directory is used.
 GOFLAGS_VENDOR=
