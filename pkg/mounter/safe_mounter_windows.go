@@ -314,20 +314,14 @@ func (mounter *csiProxyMounter) RmLink(volid, target string) error {
 	// Remove-item does not properly remove symlinks, use os.Remove and see if it work
 	klog.V(2).Infof("RmLink: volid %s, target %s", volid, target)
 
-	err := os.Remove(target)
+	path := volumePath(volid)
+	err := os.Remove(path)
 	if err != os.ErrNotExist {
 		klog.V(2).Infof("RmLink: volid %s, target %s, failed %v", volid, target, err)
 		return err
 	}
 
 	return nil
-}
-
-func (mounter *csiProxyMounter) rmVolume(volid string) error {
-	klog.V(2).Infof("RmVolume: volid %s", volid)
-
-	path := volumePath(volid)
-	return mounter.RmLink(volid, path)
 }
 
 func (mounter *csiProxyMounter) getMountTargetID(target, volid string) (string, error) {
@@ -435,9 +429,9 @@ func (mounter *csiProxyMounter) NfsUnmount(volumeID string, target string) error
 	klog.V(4).Infof("Unmount: local path: %s", target)
 	normalizedTarget := normalizeWindowsPath(target, false)
 	mountName, _ := mounter.getMountTargetID(normalizedTarget, volumeID)
-
 	klog.V(2).Infof("begin to Unmount volume %s on %s", volumeID, mountName)
 	mounter.RmDrive(volumeID, mountName)
+	mounter.RmLink(mountName, normalizedTarget)
 	return nil
 }
 
