@@ -324,6 +324,21 @@ func (mounter *csiProxyMounter) RmLink(volid, target string) error {
 	return nil
 }
 
+func (mount *csiProxyMounter) CheckVolidMounted(volid string) bool {
+	targetDir := workDir;
+	dirFiles, err := os.ReadDir(targetDir)
+	if err != nil {
+		klog.V(2).Infof("Reading workDir failed [%v]", err)
+		return false
+	}
+	for _, dirEntry := range dirFiles {
+		if strings.Contains(dirEntry.Name(), volid) {
+			return true
+		}
+	}
+	return false
+}
+
 func (mounter *csiProxyMounter) getMountTargetID(target, volid string) (string, error) {
 	targetParts := strings.FieldsFunc(target, Split)
 	klog.V(2).Infof("norm target %v, split %+v", target, targetParts)
