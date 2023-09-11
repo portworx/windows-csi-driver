@@ -20,6 +20,8 @@ limitations under the License.
 package mounter
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -27,10 +29,14 @@ import (
 	filepath "path/filepath"
 	"strings"
 
+	"github.com/libopenstorage/openstorage/api"
+	"github.com/portworx/sched-ops/k8s/core"
 	"github.com/portworx/windows-csi-driver/pkg/common"
+	//corev1 "k8s.io/api/core/v1"
 	"k8s.io/klog/v2"
 	mount "k8s.io/mount-utils"
 	utilexec "k8s.io/utils/exec"
+	"google.golang.org/grpc"
 )
 
 // CSIProxyMounter extends the mount.Interface interface with CSI Proxy methods.
@@ -104,7 +110,7 @@ func (mounter *csiProxyMounter) IsMountPointMatch(mp mount.MountPoint, dir strin
 //	path is checked.
 func (mounter *csiProxyMounter) IsLikelyNotMountPoint(path string) (bool, error) {
 	klog.V(4).Infof("IsLikelyNotMountPoint: %s", path)
-	info, err := os.Stat(normalizeWindowsPath(path, false))
+	info, err := os.Lstat(normalizeWindowsPath(path, false))
 	if err == nil {
 		return os.ModeSymlink&info.Mode() != os.ModeSymlink, nil
 	}
@@ -146,7 +152,7 @@ func (mounter *csiProxyMounter) MakeDir(path string) error {
 // ExistsPath - Checks if a path exists. Unlike util ExistsPath, this call does not perform follow link.
 func (mounter *csiProxyMounter) ExistsPath(path string) (bool, error) {
 	klog.V(4).Infof("Exists path: %s", path)
-	_, err := os.Stat(normalizeWindowsPath(path, false))
+	_, err := os.Lstat(normalizeWindowsPath(path, false))
 	if err == nil {
 		return true, nil
 	}
@@ -196,16 +202,18 @@ func (mounter *csiProxyMounter) AddDrive(
 	volid string,
 	share_path string,
 	sensitiveMountOptions []string,
-	targetPath string,
+	csimode string,
+	uuidPath string,
+	uuid string,
 ) error {
 
-	klog.V(2).Infof("AddDrive: volid %s, source %s, targetPath %s, sensitiveOpts %v",
-		volid, share_path, targetPath, sensitiveMountOptions)
+	klog.V(2).Infof("AddDrive: volid %s, source %s, uuidPath %s, sensitiveOpts %v",
+		volid, share_path, uuidPath, sensitiveMountOptions)
 
 	cmdLine := fmt.Sprintf(`New-PSDrive -Name ${Env:volid} -PSProvider FileSystem ` +
 		`-Root ${Env:path} -Scope Global -Description ${Env:pwxtag}`)
 
-	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volid=%s", targetPath),
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("volid=%s", uuid),
 		fmt.Sprintf("path=%s", share_path),
 		fmt.Sprintf("pwxtag=%s", pwxtag))
 
@@ -214,15 +222,14 @@ func (mounter *csiProxyMounter) AddDrive(
 		return fmt.Errorf("error nfs mounting. cmd %s, output %s. err %v", cmdLine, string(out), err)
 	}
 
-	klog.V(2).Infof("Successfully mounted Path from  %s, to ", share_path)
-	workPath := volumePath(targetPath)
-	_, err = os.Stat(workPath)
+	klog.V(2).Infof("Successfully Verified Mount Path %s", share_path)
+	_, err = os.Lstat(uuidPath)
 	if err == nil {
-		os.Remove(workPath)
+		os.Remove(uuidPath)
 	}
 
-	klog.V(2).Infof("AddDrive: Creating Path from  %s, to %s", workPath, share_path)
-	cmdLine = fmt.Sprintf("mklink /D %s %s", workPath, share_path)
+	klog.V(2).Infof("AddDrive: Creating Path from  %s, to %s", uuidPath, share_path)
+	cmdLine = fmt.Sprintf("mklink /D %s %s", uuidPath, share_path)
 	_, out, err = RunCmd(cmdLine)
 	if err != nil {
 		klog.V(2).Infof("AddDrive MkVolume: volid %s, failed %v", volid, err)
@@ -291,44 +298,39 @@ func (mounter *csiProxyMounter) DriveExists(
 	return ok, err
 }
 
-func (mounter *csiProxyMounter) MkLink(volid, target string) error {
+func (mounter *csiProxyMounter) MkLink(mountPath, target string) error {
 	// runs:
 	// New-item -Path c:\myvol\vol1 -ItemType SymbolicLink -Value c:\pwxvol\615688357680565115
-	klog.V(2).Infof("MkLink: volid %s, target %s", volid, target)
-
-	// internal work dir path for mounted volume
-	workPath := volumePath(volid)
+	klog.V(2).Infof("MkLink: mountPath %s, target %s", mountPath, target)
 
 	cmdLine := fmt.Sprintf("New-Item -Path ${Env:target} -ItemType SymbolicLink -Value ${Env:workPath}")
-	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("workPath=%s", workPath), fmt.Sprintf("target=%s", target))
+	_, out, err := RunPowershellCmd(cmdLine, fmt.Sprintf("workPath=%s", mountPath), fmt.Sprintf("target=%s", target))
 	if err != nil {
-		klog.V(2).Infof("MkLink: volid %s, target %s, failed %v", volid, target, err)
+		klog.V(2).Infof("MkLink: mountPath %s, target %s, failed %v", mountPath, target, err)
 		return fmt.Errorf("error mkvolume. cmd %s, output %s, err %v", cmdLine, string(out), err)
 	}
 
 	return nil
 }
 
-func (mounter *csiProxyMounter) RmLink(volid, target string) error {
+func (mounter *csiProxyMounter) RmLink(mountPath, target string) error {
 	// runs:
 	// Remove-item does not properly remove symlinks, use os.Remove and see if it work
-	klog.V(2).Infof("RmLink: volid %s, target %s", volid, target)
+	klog.V(2).Infof("RmLink: volid %s, target %s", mountPath, target)
 
-	path := volumePath(volid)
-	err := os.Remove(path)
+	err := os.Remove(mountPath)
 	if err != os.ErrNotExist {
-		klog.V(2).Infof("RmLink: volid %s, target %s, failed %v", volid, target, err)
+		klog.V(2).Infof("RmLink: mountPath %s, target %s, failed %v", mountPath, target, err)
 		return err
 	}
 
 	return nil
 }
 
-func (mount *csiProxyMounter) CheckVolidMounted(volid string) bool {
-	targetDir := workDir;
-	dirFiles, err := os.ReadDir(targetDir)
+func (mounter *csiProxyMounter) CheckVolidMounted(volid string) bool {
+	dirFiles, err := os.ReadDir(mountDir)
 	if err != nil {
-		klog.V(2).Infof("Reading workDir failed [%v]", err)
+		klog.V(2).Infof("Reading mountDir failed [%v]", err)
 		return false
 	}
 	for _, dirEntry := range dirFiles {
@@ -339,27 +341,85 @@ func (mount *csiProxyMounter) CheckVolidMounted(volid string) bool {
 	return false
 }
 
-func (mounter *csiProxyMounter) getMountTargetID(target, volid string) (string, error) {
+func (mounter *csiProxyMounter) getUUIDFromTargetPath(target, volid string) (string, error) {
+	var uuid string
 	targetParts := strings.FieldsFunc(target, Split)
-	klog.V(2).Infof("norm target %v, split %+v", target, targetParts)
-	var podID string
 	var i int
-	for i = 0; i < len(targetParts) - 1; i++ {
+	for i = 0; i < len(targetParts)-1; i++ {
 		if targetParts[i] == "pods" {
 			break
 		}
 	}
-	//mount name: <podID+volid>
-	if i >= len(targetParts) - 1 {
-		return "", fmt.Errorf("Didn't find pod ID")
+	if i >= len(targetParts)-1 {
+		return "", fmt.Errorf("Didn't find UUID in target path")
 	}
-	podID = targetParts[i+1]
-	mountName := fmt.Sprintf("%s-%s", podID, volid)
-	return mountName, nil
+	uuid = targetParts[i+1]
+	return uuid, nil
+}
+
+func (mounter *csiProxyMounter) getMountTargetID(podID, volid string) string {
+	mountName := fmt.Sprintf("%s_%s", volid, podID)
+	return mountName
+}
+
+func (mounter *csiProxyMounter) createWorkDirectories() error {
+	// check if the temp workDir exists, if not create it.
+	exists, err := mounter.ExistsPath(mountDir)
+	if err != nil {
+		return fmt.Errorf("mount dir: %s exist check failed with err: %v", mountDir, err)
+	}
+
+	if !exists {
+		klog.V(2).Infof("mount directory %s does not exists. Creating the directory", mountDir)
+		if err := mounter.MakeDir(mountDir); err != nil {
+			return fmt.Errorf("create of internal work dir: %s failed with error: %v", mountDir, err)
+		}
+	}
+
+	exists, err = mounter.ExistsPath(mountInfoDir)
+	if err != nil {
+		return fmt.Errorf("mountInfo dir: %s exist check failed with err: %v", mountInfoDir, err)
+	}
+
+	if !exists {
+		klog.V(2).Infof("uuid directory %s does not exists. Creating the directory", mountInfoDir)
+		if err := mounter.MakeDir(mountInfoDir); err != nil {
+			return fmt.Errorf("create of internal work dir: %s failed with error: %v", mountInfoDir, err)
+		}
+	}
+	return nil
+}
+
+func (mounter *csiProxyMounter) writeMountInfoFile(volumeID, endpoint, podID, podName, podNamespace string) error {
+	mountInfoFilePath := getMountInfoPath(volumeID, podID)
+	file, err := os.OpenFile(mountInfoFilePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0777)
+	if err != nil {
+		klog.V(2).Infof("Creating mountInfoFile[%s] failed with error[%v]", mountInfoFilePath, err)
+		return err
+	}
+	defer file.Close()
+	str := fmt.Sprintf("VolumeID=%s", volumeID)
+	file.WriteString(str + "\n")
+	str = fmt.Sprintf("EndPoint=%s", endpoint)
+	file.WriteString(str + "\n")
+	str = fmt.Sprintf("PodUID=%s", podID)
+	file.WriteString(str + "\n")
+	str = fmt.Sprintf("PodName=%s", podName)
+	file.WriteString(str + "\n")
+	str = fmt.Sprintf("PodNamespace=%s", podNamespace)
+	file.WriteString(str + "\n")
+	return nil
+}
+
+func (mount *csiProxyMounter) removeMountInfoFile(volumeID, podID string) {
+	mountInfoFilePath := getMountInfoPath(volumeID, podID)
+	os.Remove(mountInfoFilePath)
+	return
 }
 
 func (mounter *csiProxyMounter) NfsMount(
-	source, target, fstype string,
+	source, target, fstype, endpoint, podID string,
+	podName, podNamespace string,
 	mountOptions, sensitiveMountOptions []string,
 ) error {
 	klog.V(2).Infof("NfsMount: remote path: %s local path: %s", source, target)
@@ -367,17 +427,8 @@ func (mounter *csiProxyMounter) NfsMount(
 	klog.V(2).Infof("NfsMount: other args fsType %s, options %v, %v",
 		fstype, mountOptions, sensitiveMountOptions)
 
-	// check if the temp workDir exists, if not create it.
-	exists, err := mounter.ExistsPath(workDir)
-	if err != nil {
-		return fmt.Errorf("work dir: %s exist check failed with err: %v", workDir, err)
-	}
-
-	if !exists {
-		klog.V(2).Infof("work directory %s does not exists. Creating the directory", workDir)
-		if err := mounter.MakeDir(workDir); err != nil {
-			return fmt.Errorf("create of work dir: %s failed with error: %v", workDir, err)
-		}
+	if err := mounter.createWorkDirectories(); err != nil {
+		return err
 	}
 	parentDir := filepath.Dir(target)
 	parentExists, err := mounter.ExistsPath(parentDir)
@@ -407,32 +458,74 @@ func (mounter *csiProxyMounter) NfsMount(
 	}
 
 	klog.V(2).Infof("norm source %v, split %+v", source, parts)
+	volid := parts[len(parts)-1]
+	if endpoint == "" {
+		endpoint = parts[0]
+	}
 
 	// 'source' path has to be of form: //<ip>/var/lib/osd/mounts/<volid>
-	volid := parts[len(parts)-1]
+
+	//
+	// Order of Creation
+	// Lock : Function under volid Lock, so no concurrency issues.
+	// There is no race with a parallel creation/deletion.
+	// 1. podIDPath => normalizedTargetPath
+	// 2. normalizedTargetPath => source.
+	// 3. UUIDPath => podIDPath.
+
+	//
+	// Error at step 1: return.
+	// At Step 2: Remove podIDPath
+	// At Step 3: Remove targetPath, recreate DiR if needed.
+	// Post Step 3; Remove 3, 2, 1
+
 	normalizedTarget := normalizeWindowsPath(target, false)
-	mountName, err := mounter.getMountTargetID(normalizedTarget, volid)
+
+	if podID == "" {
+		if uuid, err := mounter.getUUIDFromTargetPath(target, volid); err != nil {
+			klog.V(2).Infof("Cannot get UUID for Target Path[%s] err[%v]", normalizedTarget, err)
+			return err
+		} else {
+			podID = uuid
+		}
+	}
+
+	if podName != "" && podNamespace != "" {
+		if err := mounter.writeMountInfoFile(volid, endpoint, podID, podName, podNamespace); err != nil {
+			klog.V(2).Infof("Failed to write MountInfo file for volid[%s] podID[%s] source[%s] target[%s] err[%v]",
+				volid, podID, source, normalizedTarget, err)
+		} else {
+			klog.V(5).Infof("Wrote MountInfo file for volid[%s] podID[%s] source[%s] target[%s] successfully",
+				volid, podID, source, normalizedTarget)
+		}
+	}
+	mountName := mounter.getMountTargetID(podID, volid)
 	if err != nil {
 		klog.V(2).Infof("begin to add drive vol %s, from %s on %s", volid, source, normalizedTarget)
 		return err
 	}
 
+	uuidPath := getMountPath(volid, podID)
+	klog.V(2).Infof("NfsMount: Creating Symlink from  %s, to %s", uuidPath, normalizedTarget)
+
 	if ok, err := mounter.DriveExists(mountName); err != nil {
 		return err
 	} else if !ok {
 		klog.V(2).Infof("begin to add drive vol %s, from %s on %s", volid, source, mountName)
-		err := mounter.AddDrive(volid, source, nil, mountName)
+		err := mounter.AddDrive(volid, source, nil, "nfs", uuidPath, podID)
 
 		if err != nil {
 			klog.V(2).Infof("Failed to addDrive %s, %s, %s, error(%v)", volid, source, normalizedTarget, err)
+			mounter.removeMountInfoFile(volid, podID)
 			return err
 		}
 	}
-	mountNamePath := volumePath(mountName)
-	// symlink the mountName to the targetPath
-	klog.V(2).Infof("NfsMount: Creating Symlink from  %s, to %s", mountNamePath, normalizedTarget)
-	if err := mounter.MkLink(mountName, normalizedTarget); err != nil {
-		klog.V(2).Infof("Failed to addDrive %s, %s, %s, error(%v)", volid, source, normalizedTarget, err)
+
+	if err := mounter.MkLink(uuidPath, normalizedTarget); err != nil {
+		klog.V(2).Infof("Failed to create uuid Link from %s, %s, error(%v)", uuidPath, normalizedTarget, err)
+		mounter.RmDrive(volid, mountName)
+		mounter.RmLink(uuidPath, normalizedTarget)
+		mounter.removeMountInfoFile(volid, podID)
 		return err
 	}
 
@@ -441,12 +534,20 @@ func (mounter *csiProxyMounter) NfsMount(
 }
 
 func (mounter *csiProxyMounter) NfsUnmount(volumeID string, target string) error {
-	klog.V(4).Infof("Unmount: local path: %s", target)
+	klog.V(4).Infof("NfsUnmount: local path: %s", target)
+
 	normalizedTarget := normalizeWindowsPath(target, false)
-	mountName, _ := mounter.getMountTargetID(normalizedTarget, volumeID)
+	var err error
+	var podID string
+	if podID, err = mounter.getUUIDFromTargetPath(target, volumeID); err != nil {
+		klog.V(2).Infof("Cannot get UUID for Target Path[%s] err[%v]", normalizedTarget, err)
+	}
+	mountName := mounter.getMountTargetID(volumeID, podID)
 	klog.V(2).Infof("begin to Unmount volume %s on %s", volumeID, mountName)
 	mounter.RmDrive(volumeID, mountName)
-	mounter.RmLink(mountName, normalizedTarget)
+	uuidPath := getMountPath(volumeID, podID)
+	mounter.RmLink(uuidPath, normalizedTarget)
+	mounter.removeMountInfoFile(volumeID, podID)
 	return nil
 }
 
@@ -482,4 +583,130 @@ func NewSafeMounter(mode string, removeSMBMappingDuringUnmount bool) (*mount.Saf
 		Interface: csiProxyMounter,
 		Exec:      utilexec.New(),
 	}, nil
+}
+
+func (mounter *csiProxyMounter) checkEndpoint(volumeClient api.OpenStorageVolumeClient, volumeID, uuid, targetIPAddr string) {
+	klog.V(7).Infof("checkEndpoint: volumeID[%v] targetIPAddr[%s] uuid[%s]", volumeID, targetIPAddr, uuid)
+	volInfo, err := volumeClient.Inspect(context.TODO(), &api.SdkVolumeInspectRequest{VolumeId: volumeID})
+	if err != nil {
+		klog.V(2).Infof("checkEndpoint: volumeID[%v] targetIPAddr[%s] Inspect failed. Error[%v]", volumeID, targetIPAddr, err)
+		return
+	}
+	if volInfo.GetVolume().GetAttachedOn() == targetIPAddr {
+		// All good, volume still attached on same node.
+		klog.V(7).Infof("checkEndpoint: volumeID[%v] targetIPAddr[%s] uuid[%s] are correct", volumeID, targetIPAddr, uuid)
+		return
+	}
+	// The mount point is Stale now, need to restart the pod.
+	// Read the mountInfo.
+	mountInfoPath := getMountInfoPath(volumeID, uuid)
+	file, err := os.Open(mountInfoPath)
+	if err != nil {
+		klog.V(2).Infof("Reading mountInfoFile[%s] failed with error[%v]", mountInfoPath, err)
+		return
+	}
+	defer file.Close()
+	fileScanner := bufio.NewScanner(file)
+	fileScanner.Split(bufio.ScanLines)
+
+	var podName string
+	var podNamespace string
+	var volume string
+	var fileEndpoint string
+	var podUID string
+	var podNameFound bool
+	var podNamespaceFound bool
+
+	for fileScanner.Scan() {
+		line := fileScanner.Text()
+		lineParts := strings.Split(line, "=")
+		switch lineParts[0] {
+		case "PodName":
+			podName = lineParts[1]
+			podNameFound = true
+		case "PodUID":
+			podUID = lineParts[1]
+		case "Endpoint":
+			fileEndpoint = lineParts[1]
+		case "VolumeID":
+			volume = lineParts[1]
+		case "PodNameSpace=%s":
+			podNamespace = lineParts[1]
+			podNamespaceFound = true
+		default:
+			klog.V(2).Infof("Unexpcted Line found")
+		}
+	}
+	klog.V(7).Infof("MountInfoPath Contents <%s,%s,%s,%s.,%s>", podName, podNamespace, podUID, fileEndpoint, volume)
+	if podNameFound && podNamespaceFound {
+		pod, err := core.Instance().GetPodByName(podName, podNamespace)
+		if err != nil {
+			klog.V(2).Infof("Failed to get pod by Name for [%s, %s], err[%v]", podName, podNamespace, err)
+			return
+		}
+		if core.Instance().IsPodBeingManaged(*pod) {
+			if pod.DeletionTimestamp == nil {
+				err = core.Instance().DeletePod(podName, podNamespace, false)
+				if err == nil {
+					klog.V(2).Infof("Successfully bounced pod [%s, %s]", podName, podNamespace)
+				}
+			}
+		} else {
+			klog.V(2).Infof("Skipping bouncing of pod [%s, %s] as it is not Managed", podName, podNamespace)
+		}
+
+	}
+	return
+}
+
+func (mounter *csiProxyMounter) BackGroundMountProcess(ipAddr string) {
+	conn, err := grpc.Dial(ipAddr, grpc.WithInsecure())
+	if err != nil {
+		klog.V(2).Infof("BackgroundMountProcess: Couldn't open rpc connection to [%s], err[%v]", ipAddr, err)
+		return
+	}
+	defer conn.Close()
+	volumeClient := api.NewOpenStorageVolumeClient(conn)
+	_, err = os.Stat(mountDir)
+	if err == nil {
+		file, err := os.Open(mountDir)
+		if err == nil {
+			names, err := file.Readdirnames(0)
+			if err == nil {
+				for _, name := range names {
+					filePath := fmt.Sprintf("%s\\%s", mountDir, name)
+					stat, statErr := os.Lstat(filePath)
+					if statErr != nil {
+						klog.V(2).Infof("BMP: Stat of [%s] failed, err[%v]", filePath, statErr)
+						continue
+					}
+					var volumeID string
+					var uuid string
+					if (stat.Mode() & os.ModeSymlink) == os.ModeSymlink {
+						fileNameparts := strings.Split(name, "_")
+						if len(fileNameparts) == 2 {
+							volumeID = fileNameparts[0]
+							uuid = fileNameparts[1]
+						} else {
+							klog.V(2).Infof("BMP: Filename not in specified format [%s]", filePath)
+							continue
+						}
+						readLink, err := os.Readlink(filePath)
+						if err != nil {
+							klog.V(2).Infof("BMP: Readlink of [%s] failed, err[%v]", filePath, err)
+							continue
+						}
+						linkParts := strings.FieldsFunc(readLink, Split)
+						// IP Address => linkParts [0]
+						// volumeID => linkParts[n-1]
+						// Assert (volumeID from fileName == linkParts[n-1])
+						mounter.checkEndpoint(volumeClient, volumeID, uuid, linkParts[0])
+					} else {
+						klog.V(2).Infof("BMP: Non Symlink file found [%s]", filePath)
+					}
+				}
+			}
+		}
+	}
+	return
 }

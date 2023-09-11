@@ -6,9 +6,15 @@ import (
 
 const pwxtag = "Portworx Network Drive"
 const workDir = "C:\\var\\pxvol"
+const mountDir = "C:\\var\\pxd.portworx.com\\mounts"
+const mountInfoDir = "C:\\var\\pxd.portworx.com\\mountInfo"
 
-func volumePath(volid string) string {
-	return fmt.Sprintf("%s\\%s", workDir, volid)
+func getMountPath(volid, uuid string) string {
+	return fmt.Sprintf("%s\\%s_%s", mountDir, volid, uuid)
+}
+
+func getMountInfoPath(volid, uuid string) string {
+	return fmt.Sprintf("%s\\%s_%s", mountInfoDir, volid, uuid)
 }
 
 func credFile() string {
@@ -24,14 +30,15 @@ type DriveInfoObj struct {
 }
 
 type NfsMounter interface {
-	NfsMount(source, target, fsType string, mountOptions, sensitiveMountOptions []string) error
+	NfsMount(source, target, fsType, endpoint, podID, podName, podNamespace string, mountOptions, sensitiveMountOptions []string) error
 	NfsUnmount(volumeId string, target string) error
-	AddDrive(volid string, sharePath string, sensitiveMountOptins []string, csimode string) error
+	AddDrive(volid string, sharePath string, sensitiveMountOptins []string, csimode string, uuidPath string, uuid string) error
 	RmDrive(volid string, targetPath string) error
 	DriveExists(volid string) (bool, error)
 	MkLink(volid, target string) error
 	RmLink(volid, target string) error
 	CheckVolidMounted(volid string) bool
+	BackGroundMountProcess(ipAddr string) 
 }
 
 type stubNfsMounter struct{}
@@ -41,6 +48,8 @@ func (nfs *stubNfsMounter) AddDrive(
 	share_path string,
 	sensitiveMountOptions []string,
 	csimode string,
+	uuidPath string,
+	uuid string,
 ) error {
 	return errStubImpl
 }
@@ -82,6 +91,7 @@ func (nfs *stubNfsMounter) RmVolume(volid string) error {
 
 func (nfs *stubNfsMounter) NfsMount(
 	source, target, fstype string,
+	endpoint, podID, podName, podNameSpace string,
 	mountOptions, sensitiveMountOptions []string,
 ) error {
 	return errStubImpl

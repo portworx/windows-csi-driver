@@ -17,17 +17,17 @@ limitations under the License.
 package nfs
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net"
-	"encoding/base64"
 	//orgcontext "context"
 	"io/ioutil"
 	"os"
 	//"path"
+	"math/rand"
 	_ "path/filepath"
 	_ "runtime"
 	"strings"
-	"math/rand"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/libopenstorage/openstorage/api"
@@ -92,6 +92,27 @@ func (d *nfsDriver) nfsNodePublishVolume(ctx context.Context, req *csi.NodePubli
 		return nil, status.Error(codes.InvalidArgument, "Target path not provided")
 	}
 
+	podName := ""
+	podNameSpace := ""
+	podUID := ""
+	volumeContext := req.GetVolumeContext()
+	if volumeContext != nil {
+		name, ok := volumeContext["csi.storage.k8s.io/pod.name"]
+		if ok {
+			podName = name
+		}
+		name, ok = volumeContext["csi.storage.k8s.io/pod.namespace"]
+		if ok {
+			podNameSpace = name
+		}
+		name, ok = volumeContext["csi.storage.k8s.io/pod.uid"]
+		if ok {
+			podUID = name
+		}
+		// TODO: Check that podUID exists after pods in the TargetPath, else we need an unique identifier in the path.
+		// if not, use the SHA / md5ckum of the targetPath as UID
+	}
+
 	if acquired := d.volumeLocks.TryAcquire(volumeID); !acquired {
 		return nil, status.Errorf(codes.Aborted, utils.VolumeOperationAlreadyExistsFmt, volumeID)
 	}
@@ -129,7 +150,8 @@ func (d *nfsDriver) nfsNodePublishVolume(ctx context.Context, req *csi.NodePubli
 
 	klog.V(2).Infof("NodePublishVolume: mounting %s at %s with mountOptions: %v volumeID(%s)", source, target, mountOptions, volumeID)
 	m := csiMounter(d.mounter)
-	if err := m.NfsMount(source, target, "nfs", mountOptions, nil); err != nil {
+	if err := m.NfsMount(source, target, "nfs", endpoint, podUID,
+		podName, podNameSpace, mountOptions, nil); err != nil {
 		klog.V(2).Infof("NodePublishVolume: mounting %s at %s with mountOptions: %v volumeID(%s) Failed with error [%v]", source, target, mountOptions, volumeID, err)
 		if removeErr := os.Remove(target); removeErr != nil {
 			return nil, status.Errorf(codes.Internal, "Could not remove mount target %q: %v", target, removeErr)
@@ -185,18 +207,18 @@ func (d *nfsDriver) nfsNodeUnpublishVolume(ctx context.Context, req *csi.NodeUnp
 			driverOpts[api.OptProxyCallerIP] = myip
 			driverOpts[api.OptMountID] = base64.StdEncoding.EncodeToString(
 				[]byte(strings.TrimSuffix(targetPath, "/")),
-				)
+			)
 		}
 		conn, err := grpc.Dial(ipAddr, grpc.WithInsecure())
 		if err != nil {
-				klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ipAddr, volumeID, err)
+			klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ipAddr, volumeID, err)
 			return nil, err
 		}
 		volumeClient := api.NewOpenStorageVolumeClient(conn)
 		volInfo, err := volumeClient.Inspect(ctx, &api.SdkVolumeInspectRequest{VolumeId: volumeID})
 		if err != nil {
 			klog.V(2).Infof("getEndpoint: IpAddress [%v] volumeID[%v] Inspect failed. Error[%v]", ipAddr, volumeID, err)
-				conn.Close()
+			conn.Close()
 			return nil, err
 		}
 		splitStrings := strings.Split(ipAddr, ":")
@@ -217,14 +239,14 @@ func (d *nfsDriver) nfsNodeUnpublishVolume(ctx context.Context, req *csi.NodeUnp
 		mountPath := "/var/lib/osd/pxns/" + volumeID
 		mountUnmountClient := api.NewOpenStorageMountAttachClient(conn)
 		klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v]: Issuing Unmount on path[%s]", ipAddr, volumeID, err, mountPath)
-		_, err = mountUnmountClient.Unmount(ctx, &api.SdkVolumeUnmountRequest{MountPath: mountPath, VolumeId: volumeID,  DriverOptions: driverOpts})
-		if  err != nil {
+		_, err = mountUnmountClient.Unmount(ctx, &api.SdkVolumeUnmountRequest{MountPath: mountPath, VolumeId: volumeID, DriverOptions: driverOpts})
+		if err != nil {
 			klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v] Unable to Unmount volume. Error[%v]", ipAddr, volumeID, err)
-				return nil, err
+			return nil, err
 		}
 		klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v]: Issuing Detach on path[%s]", ipAddr, volumeID, err, mountPath)
-		_, err = mountUnmountClient.Detach(ctx, &api.SdkVolumeDetachRequest{VolumeId: volumeID,  DriverOptions: driverOpts})
-			if  err != nil {
+		_, err = mountUnmountClient.Detach(ctx, &api.SdkVolumeDetachRequest{VolumeId: volumeID, DriverOptions: driverOpts})
+		if err != nil {
 			klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v] Unable to Detach volume. Error[%v]", ipAddr, volumeID, err)
 			return nil, err
 		}
@@ -267,7 +289,7 @@ func getLocalIPList() (string, error) {
 	return "", status.Error(codes.InvalidArgument, "failed to get localip")
 }
 
-func (d* nfsDriver)getPxPort() (string, error) {
+func (d *nfsDriver) getPxPort() (string, error) {
 	// TODO: Remove the hardcode and search for portworx-service in all namespaces.
 	svc, err := core.Instance().GetService("portworx-service", "kube-system")
 	if err != nil {
@@ -289,7 +311,7 @@ func (d* nfsDriver)getPxPort() (string, error) {
 	return gRpcPort, nil
 }
 
-func (d *nfsDriver)getRpcAddr() (string, error) {
+func (d *nfsDriver) getRpcAddr() (string, error) {
 	// Get Rpc port from portworx service.
 
 	// Get the node IP. Pick one randomly
@@ -326,7 +348,7 @@ func (d *nfsDriver)getRpcAddr() (string, error) {
 				for _, condition := range n.Status.Conditions {
 					if condition.Type == "Ready" {
 						if condition.Status != "True" {
-							skipNode  = true
+							skipNode = true
 						}
 					}
 				}
@@ -338,7 +360,7 @@ func (d *nfsDriver)getRpcAddr() (string, error) {
 							ip = addr.Address
 							ipfound = true
 							ips[i] = ip
-							i = i+1
+							i = i + 1
 							break
 						}
 					}
@@ -363,8 +385,8 @@ func (d *nfsDriver) getEndpoint(ctx context.Context, volumeID string, ipAddr, ta
 		driverOpts[api.OptProxyCaller] = myip
 		driverOpts[api.OptProxyCallerIP] = myip
 		driverOpts[api.OptMountID] = base64.StdEncoding.EncodeToString(
-                        []byte(strings.TrimSuffix(targetPath, "/")),
-			)
+			[]byte(strings.TrimSuffix(targetPath, "/")),
+		)
 	}
 	conn, err := grpc.Dial(ipAddr, grpc.WithInsecure())
 	if err != nil {
@@ -380,7 +402,7 @@ func (d *nfsDriver) getEndpoint(ctx context.Context, volumeID string, ipAddr, ta
 		return "", err
 	}
 	//mountPath := fmt.Sprintf("%s%s", "/var/lib/osd/pxns/", volumeID)
-		mountPath := "/var/lib/osd/pxns/" + volumeID
+	mountPath := "/var/lib/osd/pxns/" + volumeID
 	klog.V(2).Infof("getEndPoint: Issues Mount ipAddr[%s] mountPath [%s] volumeID[%s]", ipAddr, mountPath, volumeID)
 	_, err = mountUnmountClient.Mount(ctx, &api.SdkVolumeMountRequest{MountPath: mountPath, VolumeId: volumeID, DriverOptions: driverOpts})
 	if err != nil {
@@ -446,7 +468,8 @@ func makeDir(pathname string) error {
 
 func Mount(m *mount.SafeFormatAndMount, source, target, fsType string, mountOptions, sensitiveMountOptions []string) error {
 	proxy := csiMounter(m.Interface)
-	return proxy.NfsMount(source, target, fsType, mountOptions, sensitiveMountOptions)
+	return proxy.NfsMount(source, target, fsType, "" /* endPoint*/, "", /*podUID*/
+		"" /*podName*/, "" /*podNameSpace*/, mountOptions, sensitiveMountOptions)
 }
 
 func CleanupMountPoint(m *mount.SafeFormatAndMount, target string, extensiveMountCheck bool) error {

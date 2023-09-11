@@ -16,6 +16,7 @@ package nfs
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/portworx/windows-csi-driver/pkg/common"
@@ -91,7 +92,24 @@ func NewDriver(name, version string, options *common.DriverOptions) *nfsDriver {
 		klog.Fatalf("Failed to get safe mounter. Error: %v", err)
 	}
 
+	go d.backgroundWatcher()
+
 	return &d
+}
+
+func (d *nfsDriver) backgroundWatcher() {
+	for ; ; {
+		time.Sleep(time.Minute)
+		ipAddr, err := d.getRpcAddr()
+		if err != nil {
+			klog.V(2).Infof("Couldn't get IP Address to issue BackGroundMountProcess")
+			continue
+		}
+		if d.mounter != nil {
+			m := csiMounter(d.mounter)
+			m.BackGroundMountProcess(ipAddr)
+		}
+	}
 }
 
 func (d *nfsDriver) GetMode() common.DriverModeFlag {
