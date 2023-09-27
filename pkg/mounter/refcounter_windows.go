@@ -71,7 +71,7 @@ func getRootMappingPath(path string) (string, error) {
 //  3. Each reference is a file with name based on MD5 of remotePath. For debug it also will contains remotePath in body of the file.
 //     So, in incementRemotePathReferencesCount we create the file. In decrementRemotePathReferencesCount we remove the file.
 //     Example: c:\\csi\\smbmounts\\hostname\\sharename\\092f1413e6c1d03af8b5da6f44619af8
-func incementRemotePathReferencesCount(mappingPath, remotePath string) error {
+func incrementRemotePathReferencesCount(mappingPath, remotePath string) error {
 	remotePath = strings.TrimSuffix(remotePath, "\\")
 	path := filepath.Join(basePath, strings.TrimPrefix(mappingPath, "\\\\"))
 	if err := os.MkdirAll(path, os.ModeDir); err != nil {

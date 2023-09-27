@@ -20,9 +20,11 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+
 	//orgcontext "context"
 	"io/ioutil"
 	"os"
+
 	//"path"
 	"math/rand"
 	_ "path/filepath"
@@ -44,6 +46,7 @@ import (
 	"github.com/portworx/windows-csi-driver/pkg/mounter"
 	"golang.org/x/net/context"
 	corev1 "k8s.io/api/core/v1"
+	k8s_errors "k8s.io/apimachinery/pkg/api/errors"
 	mount "k8s.io/mount-utils"
 	k8net "k8s.io/utils/net"
 
@@ -51,6 +54,8 @@ import (
 	"google.golang.org/grpc"
 	//"google.golang.org/grpc/metadata"
 )
+
+const clientAnnotationString string = "portworx.io/clients"
 
 func safeMounter(m mount.Interface) *mount.SafeFormatAndMount {
 	p, ok := m.(*mount.SafeFormatAndMount)
@@ -136,7 +141,7 @@ func (d *nfsDriver) nfsNodePublishVolume(ctx context.Context, req *csi.NodePubli
 	if err != nil {
 		return nil, err
 	}
-	endpoint, err := d.getEndpoint(ctx, volumeID, ipAddr, target)
+	endpoint, err := d.getEndpoint(ctx, volumeID, ipAddr, target, podNameSpace)
 	if err != nil {
 		klog.V(2).Infof("NodePublishVolume: IpAddress [%v] volumeID[%v] Unable to open Grpc connection. Error[%v]", ipAddr, volumeID, err)
 		return nil, err
@@ -187,6 +192,8 @@ func (d *nfsDriver) nfsNodeUnpublishVolume(ctx context.Context, req *csi.NodeUnp
 	klog.V(2).Infof("NodeUnpublishVolume: CleanupMountPoint for %s %s successful", volumeID, targetPath)
 
 	m := csiMounter(d.mounter)
+	// Read namespace from file before it gets deleted.
+	_, podNamespace, _, _, _, _ := m.ReadSavedData(volumeID, targetPath)
 	if err := m.NfsUnmount(volumeID, targetPath); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to unmount targetPath %q: %v", targetPath, err)
 	}
@@ -208,6 +215,10 @@ func (d *nfsDriver) nfsNodeUnpublishVolume(ctx context.Context, req *csi.NodeUnp
 			driverOpts[api.OptMountID] = base64.StdEncoding.EncodeToString(
 				[]byte(strings.TrimSuffix(targetPath, "/")),
 			)
+			//PreClientUnmount
+			if podNamespace != "" {
+				d.removeClient(volumeID, podNamespace, myip)
+			}
 		}
 		conn, err := grpc.Dial(ipAddr, grpc.WithInsecure())
 		if err != nil {
@@ -217,7 +228,7 @@ func (d *nfsDriver) nfsNodeUnpublishVolume(ctx context.Context, req *csi.NodeUnp
 		volumeClient := api.NewOpenStorageVolumeClient(conn)
 		volInfo, err := volumeClient.Inspect(ctx, &api.SdkVolumeInspectRequest{VolumeId: volumeID})
 		if err != nil {
-			klog.V(2).Infof("getEndpoint: IpAddress [%v] volumeID[%v] Inspect failed. Error[%v]", ipAddr, volumeID, err)
+			klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v] Inspect failed. Error[%v]", ipAddr, volumeID, err)
 			conn.Close()
 			return nil, err
 		}
@@ -235,7 +246,6 @@ func (d *nfsDriver) nfsNodeUnpublishVolume(ctx context.Context, req *csi.NodeUnp
 			conn = newconn
 		}
 		defer conn.Close()
-
 		mountPath := "/var/lib/osd/pxns/" + volumeID
 		mountUnmountClient := api.NewOpenStorageMountAttachClient(conn)
 		klog.V(2).Infof("NodeUnpublishVolume: IpAddress [%v] volumeID[%v]: Issuing Unmount on path[%s]", ipAddr, volumeID, err, mountPath)
@@ -258,7 +268,7 @@ func (d *nfsDriver) nfsNodeUnpublishVolume(ctx context.Context, req *csi.NodeUnp
 	return &csi.NodeUnpublishVolumeResponse{}, nil
 }
 
-// getLocalIPList returns the list of local IP addresses, and optionally includes local hostname.
+// getLocalIPList returns the list of local IP addresses
 func getLocalIPList() (string, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
@@ -267,7 +277,6 @@ func getLocalIPList() (string, error) {
 	for _, i := range ifaces {
 		addrs, err := i.Addrs()
 		if err != nil {
-			//                logrus.WithError(err).Warnf("Error listing address for %s (cont.)", i.Name)
 			klog.V(2).Infof("Error listing address for %s (cont.)", i.Name)
 			continue
 		}
@@ -311,6 +320,87 @@ func (d *nfsDriver) getPxPort() (string, error) {
 	return gRpcPort, nil
 }
 
+func (d *nfsDriver) getPxVolumeServiceName(volumeID string) string {
+	return "px-" + volumeID + "-server"
+}
+
+// Add clientIP to volumedID based service annotation, if not already added.
+func (d *nfsDriver) addClient(volumeID string, namespace string, nodeIP string) error {
+	svc, err := core.Instance().GetService(d.getPxVolumeServiceName(volumeID), namespace)
+	if err != nil {
+		return err
+	}
+	clientAnnotation := svc.Annotations[clientAnnotationString]
+	needsUpdate := false
+	if len(clientAnnotation) == 0 {
+		clientAnnotation = nodeIP
+		needsUpdate = true
+	} else {
+		clientIPs := strings.Split(clientAnnotation, ",")
+		found := false
+		for _, ip := range clientIPs {
+			if ip == nodeIP {
+				found = true
+				break
+			}
+		}
+		if !found {
+			clientIPs = append(clientIPs, nodeIP)
+			needsUpdate = true
+		}
+		clientAnnotation = strings.Join(clientIPs, ",")
+	}
+	if needsUpdate {
+		svc.Annotations[clientAnnotationString] = clientAnnotation
+		_, err = core.Instance().UpdateService(svc)
+		return err
+	}
+	return nil
+}
+
+// Remove clientIP to volumedID based service annotation, if not already removed
+func (d *nfsDriver) removeClient(volumeID string, namespace string, nodeIP string) error {
+	svc, err := core.Instance().GetService(d.getPxVolumeServiceName(volumeID), namespace)
+	if err != nil {
+		if k8s_errors.IsNotFound(err) {
+			klog.V(2).Infof("Sharedv4 service %s/%s not found while removing client %s for volume %s", d.getPxVolumeServiceName(volumeID), namespace, nodeIP, volumeID)
+			return nil
+		}
+		return err
+	}
+	clientAnnotation := svc.Annotations[clientAnnotationString]
+	needsUpdate := false
+	if len(clientAnnotation) == 0 {
+		return nil
+	} else {
+		index := -1
+		clientIPs := strings.Split(clientAnnotation, ",")
+		for i, ip := range clientIPs {
+			if ip == nodeIP {
+				index = i
+				break
+			}
+		}
+		if index != -1 {
+			needsUpdate = true
+			if index == len(clientIPs)-1 {
+				clientIPs = clientIPs[:len(clientIPs)-1]
+			} else {
+				clientIPs = append(clientIPs[:index], clientIPs[index+1:]...)
+			}
+		}
+		clientAnnotation = strings.Join(clientIPs, ",")
+	}
+	if needsUpdate {
+		svc.Annotations[clientAnnotationString] = clientAnnotation
+		_, err = core.Instance().UpdateService(svc)
+		return err
+	}
+	return nil
+}
+
+
+// return IPAddr:portnum to issue openstorage gRpc requests
 func (d *nfsDriver) getRpcAddr() (string, error) {
 	// Get Rpc port from portworx service.
 
@@ -325,46 +415,30 @@ func (d *nfsDriver) getRpcAddr() (string, error) {
 	var ip string
 	var ips = make(map[int]string)
 	var i = 0
-	nodes, errnodes := core.Instance().GetNodes()
+	nodes, errnodes := core.Instance().GetReadyLinuxNodes()
 	if errnodes != nil {
 		klog.V(2).Infof("Getting Node information failed error[%v]", errnodes)
 		return "", err
 	}
-	// For each node, get's it's annotations and labels
 	for _, n := range nodes.Items {
-		nodeLabels := make(map[string]string)
-		for k, v := range n.GetLabels() {
-			nodeLabels[k] = v
+		// Skip non-portworx nodes.
+		// Relying on annotations for identifying portworx nodes.
+
+		nodeAnnotations := n.GetAnnotations()
+		csi, ok := nodeAnnotations["csi.volume.kubernetes.io/nodeid"]
+		if !ok || !strings.Contains(csi, "pxd.portworx.com") {
+			// not a portworx node.
+			continue
 		}
 
-		for k, v := range n.GetAnnotations() {
-			nodeLabels[k] = v
-		}
-		v, ok := nodeLabels["beta.kubernetes.io/os"]
-		if ok && v == "linux" {
-			csi, ok := nodeLabels["csi.volume.kubernetes.io/nodeid"]
-			if ok && strings.Contains(csi, "pxd.portworx.com") {
-				skipNode := false
-				for _, condition := range n.Status.Conditions {
-					if condition.Type == "Ready" {
-						if condition.Status != "True" {
-							skipNode = true
-						}
-					}
-				}
-
-				if !skipNode {
-					for _, addr := range n.Status.Addresses {
-						switch addr.Type {
-						case corev1.NodeInternalIP:
-							ip = addr.Address
-							ipfound = true
-							ips[i] = ip
-							i = i + 1
-							break
-						}
-					}
-				}
+		for _, addr := range n.Status.Addresses {
+			switch addr.Type {
+			case corev1.NodeInternalIP:
+				ip = addr.Address
+				ipfound = true
+				ips[i] = ip
+				i = i + 1
+				break
 			}
 		}
 	}
@@ -377,7 +451,9 @@ func (d *nfsDriver) getRpcAddr() (string, error) {
 	return str, nil
 }
 
-func (d *nfsDriver) getEndpoint(ctx context.Context, volumeID string, ipAddr, targetPath string) (string, error) {
+// get the nfs path to mount
+
+func (d *nfsDriver) getEndpoint(ctx context.Context, volumeID, ipAddr, targetPath, podNameSpace string) (string, error) {
 	myip, err := getLocalIPList()
 	driverOpts := make(map[string]string)
 	driverOpts["WindowsClient"] = "true"
@@ -401,6 +477,10 @@ func (d *nfsDriver) getEndpoint(ctx context.Context, volumeID string, ipAddr, ta
 		klog.V(2).Infof("getEndpoint: IpAddress [%v] volumeID[%v] Attach failed. Error[%v]", ipAddr, volumeID, err)
 		return "", err
 	}
+
+	//PreClientMount equivalent.
+
+	err = d.addClient(volumeID, podNameSpace, myip)
 	//mountPath := fmt.Sprintf("%s%s", "/var/lib/osd/pxns/", volumeID)
 	mountPath := "/var/lib/osd/pxns/" + volumeID
 	klog.V(2).Infof("getEndPoint: Issues Mount ipAddr[%s] mountPath [%s] volumeID[%s]", ipAddr, mountPath, volumeID)
@@ -524,31 +604,6 @@ func hasGuestMountOptions(options []string) bool {
 		}
 	}
 	return false
-}
-
-// setKeyValueInMap set key/value pair in map
-// key in the map is case insensitive, if key already exists, overwrite existing value
-func setKeyValueInMap(m map[string]string, key, value string) {
-	if m == nil {
-		return
-	}
-	for k := range m {
-		if strings.EqualFold(k, key) {
-			m[k] = value
-			return
-		}
-	}
-	m[key] = value
-}
-
-// replaceWithMap replace key with value for str
-func replaceWithMap(str string, m map[string]string) string {
-	for k, v := range m {
-		if k != "" {
-			str = strings.ReplaceAll(str, k, v)
-		}
-	}
-	return str
 }
 
 func newContext() context.Context {

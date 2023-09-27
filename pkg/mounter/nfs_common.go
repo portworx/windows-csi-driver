@@ -38,7 +38,8 @@ type NfsMounter interface {
 	MkLink(volid, target string) error
 	RmLink(volid, target string) error
 	CheckVolidMounted(volid string) bool
-	BackGroundMountProcess(ipAddr string) 
+	BackGroundMountProcess(ipAddr string)
+	ReadSavedData(volid, targetPath string) (string, string, string, string, string, error)
 }
 
 type stubNfsMounter struct{}

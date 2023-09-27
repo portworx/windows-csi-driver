@@ -32,11 +32,12 @@ import (
 	"github.com/libopenstorage/openstorage/api"
 	"github.com/portworx/sched-ops/k8s/core"
 	"github.com/portworx/windows-csi-driver/pkg/common"
+
 	//corev1 "k8s.io/api/core/v1"
+	"google.golang.org/grpc"
 	"k8s.io/klog/v2"
 	mount "k8s.io/mount-utils"
 	utilexec "k8s.io/utils/exec"
-	"google.golang.org/grpc"
 )
 
 // CSIProxyMounter extends the mount.Interface interface with CSI Proxy methods.
@@ -585,25 +586,14 @@ func NewSafeMounter(mode string, removeSMBMappingDuringUnmount bool) (*mount.Saf
 	}, nil
 }
 
-func (mounter *csiProxyMounter) checkEndpoint(volumeClient api.OpenStorageVolumeClient, volumeID, uuid, targetIPAddr string) {
-	klog.V(7).Infof("checkEndpoint: volumeID[%v] targetIPAddr[%s] uuid[%s]", volumeID, targetIPAddr, uuid)
-	volInfo, err := volumeClient.Inspect(context.TODO(), &api.SdkVolumeInspectRequest{VolumeId: volumeID})
-	if err != nil {
-		klog.V(2).Infof("checkEndpoint: volumeID[%v] targetIPAddr[%s] Inspect failed. Error[%v]", volumeID, targetIPAddr, err)
-		return
-	}
-	if volInfo.GetVolume().GetAttachedOn() == targetIPAddr {
-		// All good, volume still attached on same node.
-		klog.V(7).Infof("checkEndpoint: volumeID[%v] targetIPAddr[%s] uuid[%s] are correct", volumeID, targetIPAddr, uuid)
-		return
-	}
+func (mounter *csiProxyMounter) readMountInfoFile(volumeID, uuid string) (string, string, string, string, string, error) {
 	// The mount point is Stale now, need to restart the pod.
 	// Read the mountInfo.
 	mountInfoPath := getMountInfoPath(volumeID, uuid)
 	file, err := os.Open(mountInfoPath)
 	if err != nil {
 		klog.V(2).Infof("Reading mountInfoFile[%s] failed with error[%v]", mountInfoPath, err)
-		return
+		return "", "", "", "", "", err
 	}
 	defer file.Close()
 	fileScanner := bufio.NewScanner(file)
@@ -614,8 +604,6 @@ func (mounter *csiProxyMounter) checkEndpoint(volumeClient api.OpenStorageVolume
 	var volume string
 	var fileEndpoint string
 	var podUID string
-	var podNameFound bool
-	var podNamespaceFound bool
 
 	for fileScanner.Scan() {
 		line := fileScanner.Text()
@@ -623,51 +611,58 @@ func (mounter *csiProxyMounter) checkEndpoint(volumeClient api.OpenStorageVolume
 		switch lineParts[0] {
 		case "PodName":
 			podName = lineParts[1]
-			podNameFound = true
 		case "PodUID":
 			podUID = lineParts[1]
-		case "Endpoint":
+		case "EndPoint":
 			fileEndpoint = lineParts[1]
 		case "VolumeID":
 			volume = lineParts[1]
-		case "PodNameSpace=%s":
+		case "PodNamespace":
 			podNamespace = lineParts[1]
-			podNamespaceFound = true
 		default:
 			klog.V(2).Infof("Unexpcted Line found")
 		}
 	}
-	klog.V(7).Infof("MountInfoPath Contents <%s,%s,%s,%s.,%s>", podName, podNamespace, podUID, fileEndpoint, volume)
-	if podNameFound && podNamespaceFound {
-		pod, err := core.Instance().GetPodByName(podName, podNamespace)
-		if err != nil {
-			klog.V(2).Infof("Failed to get pod by Name for [%s, %s], err[%v]", podName, podNamespace, err)
-			return
-		}
-		if core.Instance().IsPodBeingManaged(*pod) {
-			if pod.DeletionTimestamp == nil {
-				err = core.Instance().DeletePod(podName, podNamespace, false)
-				if err == nil {
-					klog.V(2).Infof("Successfully bounced pod [%s, %s]", podName, podNamespace)
-				}
-			}
-		} else {
-			klog.V(2).Infof("Skipping bouncing of pod [%s, %s] as it is not Managed", podName, podNamespace)
-		}
+	return podName, podNamespace, podUID, volume, fileEndpoint, nil
+}
 
+func (mounter *csiProxyMounter) ReadSavedData(volumeID, targetPath string) (string, string, string, string, string, error) {
+	uuid, err := mounter.getUUIDFromTargetPath(targetPath, volumeID)
+	if err == nil {
+		return mounter.readMountInfoFile(volumeID, uuid)
+	}
+	return "", "", "", "", "", err
+}
+
+func (mounter *csiProxyMounter) restartManagedPods(volumeClient api.OpenStorageVolumeClient, volumeID, uuid string) {
+	podName, podNamespace, podUID, volume, fileEndpoint, err := mounter.readMountInfoFile(volumeID, uuid)
+	if err == nil {
+		klog.V(7).Infof("MountInfoPath Contents <%s,%s,%s,%s.,%s>", podName, podNamespace, podUID, fileEndpoint, volume)
+		if podName != "" && podNamespace != "" {
+			pod, err := core.Instance().GetPodByName(podName, podNamespace)
+			if err != nil {
+				klog.V(2).Infof("Failed to get pod by Name for [%s, %s], err[%v]", podName, podNamespace, err)
+				return
+			}
+			if core.Instance().IsPodBeingManaged(*pod) {
+				if pod.DeletionTimestamp == nil {
+					err = core.Instance().DeletePod(podName, podNamespace, false)
+					if err == nil {
+						klog.V(2).Infof("Successfully bounced pod [%s, %s]", podName, podNamespace)
+					}
+				}
+
+			} else {
+				klog.V(2).Infof("Skipping bouncing of pod [%s, %s] as it is not Managed", podName, podNamespace)
+			}
+		}
 	}
 	return
 }
 
 func (mounter *csiProxyMounter) BackGroundMountProcess(ipAddr string) {
-	conn, err := grpc.Dial(ipAddr, grpc.WithInsecure())
-	if err != nil {
-		klog.V(2).Infof("BackgroundMountProcess: Couldn't open rpc connection to [%s], err[%v]", ipAddr, err)
-		return
-	}
-	defer conn.Close()
-	volumeClient := api.NewOpenStorageVolumeClient(conn)
-	_, err = os.Stat(mountDir)
+	exportMap := make(map[string][]string)
+	_, err := os.Stat(mountDir)
 	if err == nil {
 		file, err := os.Open(mountDir)
 		if err == nil {
@@ -680,30 +675,67 @@ func (mounter *csiProxyMounter) BackGroundMountProcess(ipAddr string) {
 						klog.V(2).Infof("BMP: Stat of [%s] failed, err[%v]", filePath, statErr)
 						continue
 					}
-					var volumeID string
-					var uuid string
 					if (stat.Mode() & os.ModeSymlink) == os.ModeSymlink {
-						fileNameparts := strings.Split(name, "_")
-						if len(fileNameparts) == 2 {
-							volumeID = fileNameparts[0]
-							uuid = fileNameparts[1]
-						} else {
-							klog.V(2).Infof("BMP: Filename not in specified format [%s]", filePath)
-							continue
-						}
 						readLink, err := os.Readlink(filePath)
 						if err != nil {
 							klog.V(2).Infof("BMP: Readlink of [%s] failed, err[%v]", filePath, err)
 							continue
 						}
-						linkParts := strings.FieldsFunc(readLink, Split)
-						// IP Address => linkParts [0]
-						// volumeID => linkParts[n-1]
-						// Assert (volumeID from fileName == linkParts[n-1])
-						mounter.checkEndpoint(volumeClient, volumeID, uuid, linkParts[0])
+						_,ok := exportMap[readLink]
+						if !ok {
+							str := make([]string, 0)
+							exportMap[readLink] = str
+							exportMap[readLink] = append(exportMap[readLink], name)
+						} else {
+							exportMap[readLink] = append(exportMap[readLink], name)
+						}
 					} else {
 						klog.V(2).Infof("BMP: Non Symlink file found [%s]", filePath)
 					}
+				}
+			}
+		}
+	}
+	if len(exportMap) > 0 {
+		conn, err := grpc.Dial(ipAddr, grpc.WithInsecure())
+		if err != nil {
+			klog.V(2).Infof("BackgroundMountProcess: Couldn't open rpc connection to [%s], err[%v]", ipAddr, err)
+			return
+		}
+		defer conn.Close()
+		clusterClient := api.NewOpenStorageClusterClient(conn)
+
+		clusterInfo, err := clusterClient.InspectCurrent(context.TODO(), &api.SdkClusterInspectCurrentRequest{})
+		if err == nil {
+			klog.V(2).Infof("BackgroundMountProcess: clusterInfo[%v]", clusterInfo)
+		}
+		volumeClient := api.NewOpenStorageVolumeClient(conn)
+		for readLink, nameMap := range exportMap {
+			linkParts := strings.FieldsFunc(readLink, Split)
+			// IP Address => linkParts [0]
+			// volumeID => linkParts[n-1]
+			targetIPAddr := linkParts[0]
+			volumeID := linkParts[len(linkParts) - 1]
+			klog.V(7).Infof("BMP: Link[%v]", readLink)
+			volInfo, err := volumeClient.Inspect(context.TODO(), &api.SdkVolumeInspectRequest{VolumeId: volumeID})
+			if err != nil {
+				klog.V(2).Infof("BMP: volumeID[%v] targetIPAddr[%s] Inspect failed. Error[%v]", volumeID, targetIPAddr, err)
+				continue
+			}
+			if volInfo.GetVolume().GetAttachedOn() != targetIPAddr {
+				// All the pods needs to be restarted.
+				for _,name := range nameMap {
+					var nameVolumeID string
+					var uuid string
+					fileNameparts := strings.Split(name, "_")
+					if len(fileNameparts) == 2 {
+						nameVolumeID = fileNameparts[0]
+						uuid = fileNameparts[1]
+					} else {
+						klog.V(2).Infof("BMP: Filename not in specified format [%s]", name)
+						continue
+					}
+					mounter.restartManagedPods(volumeClient, nameVolumeID, uuid)
 				}
 			}
 		}
